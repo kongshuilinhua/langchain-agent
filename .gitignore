@@ -1,0 +1,23 @@
+# Python 缓存和编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+.env
+
+# IDEA / PyCharm 配置
+.idea/
+
+# 项目特有的生成文件、日志和数据库
+logs/
+storage/
+rag/chroma_db/
+agent/tools/chroma_db/
+*.sqlite3
+*.log
+
+# 根据需要决定是否忽略 data 中的大文件，如果不忽略可以直接删掉下一行
+# data/外部数据等
