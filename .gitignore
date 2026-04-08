@@ -6,6 +6,7 @@ __pycache__/
 # 虚拟环境
 venv/
 env/
+.venv/
 .env
 
 # IDEA / PyCharm 配置
@@ -18,6 +19,7 @@ rag/chroma_db/
 agent/tools/chroma_db/
 *.sqlite3
 *.log
+md5.txt
 
 # 根据需要决定是否忽略 data 中的大文件，如果不忽略可以直接删掉下一行
 # data/外部数据等
