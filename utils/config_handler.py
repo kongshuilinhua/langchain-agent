@@ -1,26 +1,22 @@
-"""
-yaml
-k:v
-"""
 import yaml
 from utils.path_tool import get_abs_path
 
 
 def load_rag_config(config_path: str = get_abs_path("config/rag.yaml"), encoding: str = "utf-8"):
     with open(config_path, encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        return yaml.safe_load(f)
 
 def load_chroma_config(config_path: str = get_abs_path("config/chroma.yaml"), encoding: str = "utf-8"):
     with open(config_path, encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        return yaml.safe_load(f)
 
 def load_prompts_config(config_path: str = get_abs_path("config/prompt.yaml"), encoding: str = "utf-8"):
     with open(config_path, encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        return yaml.safe_load(f)
 
 def load_agent_config(config_path: str = get_abs_path("config/agent.yaml"), encoding: str = "utf-8"):
     with open(config_path, encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        return yaml.safe_load(f)
 
 
 rag_conf = load_rag_config()

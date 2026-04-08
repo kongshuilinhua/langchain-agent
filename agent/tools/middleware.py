@@ -17,20 +17,25 @@ def monitor_tool(
         # 执行的函数本身
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
 ) -> ToolMessage | Command:             # 工具执行的监控
-    logger.info(f"[tool monitor]执行工具：{request.tool_call['name']}")
-    logger.info(f"[tool monitor]传入参数：{request.tool_call['args']}")
+    tool_name = request.tool_call.get("name", "unknown_tool")
+    tool_args = request.tool_call.get("args", {})
+    logger.info(f"[tool monitor]执行工具：{tool_name}")
+    logger.info(f"[tool monitor]传入参数：{tool_args}")
 
     try:
         result = handler(request)
-        logger.info(f"[tool monitor]工具{request.tool_call['name']}调用成功")
+        logger.info(f"[tool monitor]工具{tool_name}调用成功")
 
-        if request.tool_call['name'] == "fill_context_for_report":
+        if tool_name == "fill_context_for_report":
             request.runtime.context["report"] = True
 
         return result
     except Exception as e:
-        logger.error(f"工具{request.tool_call['name']}调用失败，原因：{str(e)}")
-        raise e
+        logger.error(f"工具{tool_name}调用失败，原因：{str(e)}", exc_info=True)
+        return ToolMessage(
+            content=f"工具{tool_name}调用失败：{str(e)}",
+            tool_call_id=request.tool_call.get("id", tool_name),
+        )
 
 
 @before_model
