@@ -53,7 +53,12 @@ def log_before_model(
 @dynamic_prompt                 # 每一次在生成提示词之前，调用此函数
 def report_prompt_switch(request: ModelRequest):     # 动态切换提示词
     is_report = request.runtime.context.get("report", False)
+    session_facts = request.runtime.context.get("session_facts", {})
+    facts_prompt = ""
+    if session_facts:
+        fact_lines = [f"- {key}: {value}" for key, value in session_facts.items()]
+        facts_prompt = "\n\n已知会话事实：\n" + "\n".join(fact_lines) + "\n请优先使用这些历史事实回答，不要忽略用户之前已经明确提到的信息。"
     if is_report:               # 是报告生成场景，返回报告生成提示词内容
-        return load_report_prompts()
+        return load_report_prompts() + facts_prompt
 
-    return load_system_prompts()
+    return load_system_prompts() + facts_prompt

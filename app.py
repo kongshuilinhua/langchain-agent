@@ -2,6 +2,15 @@ import streamlit as st
 from agent.react_agent import ReactAgent
 from agent.tools.agent_tools import rag as rag_service
 from utils.bootstrap import validate_runtime
+from utils.chat_session_store import (
+    create_session,
+    delete_session,
+    load_sessions,
+    save_sessions,
+    sort_sessions,
+    update_session_messages,
+    upsert_session,
+)
 from utils.file_handler import clean_text, pdf_loader
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
@@ -242,11 +251,63 @@ if runtime_issues:
 if "agent" not in st.session_state:
     st.session_state["agent"] = ReactAgent()
 
-if "messages" not in st.session_state:
-    st.session_state["messages"] = []
+if "sessions" not in st.session_state:
+    sessions = sort_sessions(load_sessions())
+    if not sessions:
+        sessions = [create_session()]
+        save_sessions(sessions)
+    st.session_state["sessions"] = sessions
+
+if "current_session_id" not in st.session_state:
+    st.session_state["current_session_id"] = st.session_state["sessions"][0]["id"]
 
 if "pending_prompt" not in st.session_state:
     st.session_state["pending_prompt"] = ""
+
+
+def get_current_session() -> dict:
+    current_session_id = st.session_state["current_session_id"]
+    for session in st.session_state["sessions"]:
+        if session["id"] == current_session_id:
+            return session
+    fallback = create_session()
+    st.session_state["sessions"] = [fallback] + st.session_state["sessions"]
+    st.session_state["current_session_id"] = fallback["id"]
+    save_sessions(sort_sessions(st.session_state["sessions"]))
+    return fallback
+
+
+def persist_current_messages(messages: list[dict]) -> None:
+    current = get_current_session()
+    updated = update_session_messages(current, messages)
+    st.session_state["sessions"] = sort_sessions(upsert_session(st.session_state["sessions"], updated))
+    st.session_state["current_session_id"] = updated["id"]
+    save_sessions(st.session_state["sessions"])
+
+
+def switch_session(session_id: str) -> None:
+    st.session_state["current_session_id"] = session_id
+    st.session_state["pending_prompt"] = ""
+
+
+def create_new_chat() -> None:
+    new_session = create_session()
+    st.session_state["sessions"] = sort_sessions(upsert_session(st.session_state["sessions"], new_session))
+    st.session_state["current_session_id"] = new_session["id"]
+    st.session_state["pending_prompt"] = ""
+    save_sessions(st.session_state["sessions"])
+
+
+def delete_current_chat() -> None:
+    current_id = st.session_state["current_session_id"]
+    sessions = delete_session(st.session_state["sessions"], current_id)
+    if not sessions:
+        sessions = [create_session()]
+    sessions = sort_sessions(sessions)
+    st.session_state["sessions"] = sessions
+    st.session_state["current_session_id"] = sessions[0]["id"]
+    st.session_state["pending_prompt"] = ""
+    save_sessions(sessions)
 
 
 def split_response_and_references(content: str) -> tuple[str, list[str]]:
@@ -326,6 +387,30 @@ def render_message(message: dict):
     st.write(body or message["content"])
     render_references(references)
 
+
+with st.sidebar:
+    st.markdown("## 会话管理")
+    sidebar_action_cols = st.columns(2)
+    if sidebar_action_cols[0].button("新建会话", use_container_width=True):
+        create_new_chat()
+        st.rerun()
+    if sidebar_action_cols[1].button("删除当前", use_container_width=True):
+        delete_current_chat()
+        st.rerun()
+
+    st.caption("历史会话")
+    current_session = get_current_session()
+    for session in st.session_state["sessions"]:
+        label = session["title"] or "新对话"
+        if st.button(
+            label,
+            key=f"session_{session['id']}",
+            use_container_width=True,
+            type="primary" if session["id"] == current_session["id"] else "secondary",
+        ):
+            switch_session(session["id"])
+            st.rerun()
+
 st.markdown(
     """
     <div class="hero-wrap">
@@ -342,7 +427,7 @@ st.markdown(
 st.write("")
 action_cols = st.columns([1, 1, 4])
 if action_cols[0].button("清空会话"):
-    st.session_state["messages"] = []
+    persist_current_messages([])
     st.session_state["pending_prompt"] = ""
     st.rerun()
 
@@ -367,10 +452,13 @@ for col, text in zip(shortcut_cols, shortcuts):
     if col.button(text):
         st.session_state["pending_prompt"] = text
 
-if not st.session_state["messages"]:
+current_session = get_current_session()
+current_messages = current_session.get("messages", [])
+
+if not current_messages:
     st.info("可以先试试上面的快捷问题，也可以直接在下方输入你的需求。")
 
-for message in st.session_state["messages"]:
+for message in current_messages:
     avatar = "🧑" if message["role"] == "user" else "🤖"
     with st.chat_message(message["role"], avatar=avatar):
         render_message(message)
@@ -381,7 +469,8 @@ if prompt:
     st.session_state["pending_prompt"] = ""
     with st.chat_message("user", avatar="🧑"):
         st.write(prompt)
-    st.session_state["messages"].append({"role": "user", "content": prompt})
+    current_messages = current_messages + [{"role": "user", "content": prompt}]
+    persist_current_messages(current_messages)
 
     response_chunks = []
 
@@ -394,7 +483,7 @@ if prompt:
 
     try:
         with st.spinner("正在分析问题并检索答案..."):
-            res_stream = st.session_state["agent"].execute_stream(st.session_state["messages"])
+            res_stream = st.session_state["agent"].execute_stream(current_messages)
             with st.chat_message("assistant", avatar="🤖"):
                 response_placeholder = st.empty()
                 for _ in capture(res_stream, response_chunks, response_placeholder):
@@ -413,5 +502,6 @@ if prompt:
         with st.chat_message("assistant", avatar="🤖"):
             st.write(response_text)
 
-    st.session_state["messages"].append({"role": "assistant", "content": response_text})
+    current_messages = current_messages + [{"role": "assistant", "content": response_text}]
+    persist_current_messages(current_messages)
     st.rerun()
