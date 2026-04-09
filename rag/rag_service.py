@@ -13,7 +13,10 @@ from model.factory import get_chat_model
 from langchain_core.output_parsers import StrOutputParser
 
 class RagSummarizeService(object):
+    """RAG 服务入口，负责检索、重排、总结和来源整理。"""
+
     def __init__(self):
+        """初始化向量库、提示词链路和检索相关参数。"""
         self.vector_store = VectorStoreService()
         self._collection_ready_checked = False
         self._repair_lock = threading.Lock()
@@ -41,6 +44,7 @@ class RagSummarizeService(object):
         }
 
     def _init_chain(self):
+        """构造“提示词 -> 模型 -> 文本解析”的最小总结链。"""
         chain = self.prompt_template | self.model | StrOutputParser()
         return chain
 
@@ -80,6 +84,7 @@ class RagSummarizeService(object):
         )
 
     def _repair_vector_store(self):
+        """在检测到索引损坏时，串行重建向量库，避免并发修复。"""
         with self._repair_lock:
             logger.warning("检测到向量索引异常，开始重建向量库")
             self.vector_store.reset_store(clear_md5=True)
@@ -90,6 +95,7 @@ class RagSummarizeService(object):
 
     @staticmethod
     def _normalize_query(query: str) -> str:
+        """对用户问题做轻量规范化，统一一些常见别名。"""
         normalized = re.sub(r"\s+", " ", query.strip().lower())
         replacements = {
             "扫拖一体": "扫拖一体机器人",
@@ -102,6 +108,7 @@ class RagSummarizeService(object):
         return normalized
 
     def _expand_query(self, query: str) -> str:
+        """把口语化问题扩展成更适合检索的表达。"""
         normalized = self._normalize_query(query)
         expansions = []
         for phrase, candidates in self.synonym_map.items():
@@ -112,6 +119,7 @@ class RagSummarizeService(object):
         return normalized
 
     def _query_terms(self, query: str) -> set[str]:
+        """提取检索关键词，供后续重排计算覆盖率。"""
         expanded = self._expand_query(query)
         terms = set()
         for term in re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9]+", expanded):
@@ -121,15 +129,23 @@ class RagSummarizeService(object):
 
     @staticmethod
     def _document_terms(content: str) -> set[str]:
+        """把文档内容切成词项集合，便于和 query 做简单交集比较。"""
         return set(re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9]+", content.lower()))
 
     def _rerank_score(self, query_terms: set[str], content: str, relevance_score: float) -> float:
+        """
+        组合向量分数和关键词覆盖率。
+
+        这里不是完整 reranker，而是一个成本很低的启发式重排，
+        用来避免“向量相似但关键词没对上”的片段排得过高。
+        """
         doc_terms = self._document_terms(content)
         overlap = len(query_terms & doc_terms)
         coverage = overlap / max(len(query_terms), 1)
         return relevance_score * 0.7 + coverage * 0.3
 
     def retriever_docs(self, query):
+        """执行检索主流程：查询扩展 -> 候选召回 -> 轻量重排 -> 截断返回。"""
         self._ensure_collection_ready()
         expanded_query = self._expand_query(query)
         query_terms = self._query_terms(query)
@@ -153,6 +169,7 @@ class RagSummarizeService(object):
             else:
                 return []
 
+        # 先保留候选，再按自定义分数重新排序。
         scored_docs = []
         for doc, relevance_score in candidates:
             if relevance_score < self.min_relevance_score:
@@ -171,6 +188,7 @@ class RagSummarizeService(object):
 
     @staticmethod
     def _format_references(docs) -> str:
+        """把命中的来源整理成回答尾部可展示的引用列表。"""
         references = []
         seen = set()
         for doc in docs:
@@ -185,6 +203,7 @@ class RagSummarizeService(object):
         return "\n参考来源：\n- " + "\n- ".join(references)
 
     def rag_summarize(self, query):
+        """对外暴露的 RAG 总入口，返回“总结结果 + 引用来源”。"""
         try:
             context_docs = self.retriever_docs(query)
         except Exception as e:
@@ -194,6 +213,7 @@ class RagSummarizeService(object):
         if not context_docs:
             return "未检索到相关参考资料。"
 
+        # 把命中文档拼成可追踪来源的上下文，便于模型总结时引用。
         context_parts = []
         for counter, doc in enumerate(context_docs, start=1):
             source = doc.metadata.get("source", "未知来源")

@@ -22,7 +22,10 @@ from utils.logger_handler import logger
 
 
 class VectorStoreService:
+    """知识库入库与向量库维护服务。"""
+
     def __init__(self):
+        """初始化路径、manifest 与不同文件类型的切块器。"""
         self.collection_name = chroma_conf['collection_name']
         self.persist_directory = get_abs_path(chroma_conf['persist_directory'])
         self.md5_hex_store = get_abs_path(chroma_conf['md5_hex_store'])
@@ -50,6 +53,7 @@ class VectorStoreService:
         )
 
     def _build_splitter(self, chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
+        """按给定参数构造切块器，便于 txt/pdf 分别调参。"""
         return RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -58,6 +62,7 @@ class VectorStoreService:
         )
 
     def _get_splitter(self, read_path: str) -> RecursiveCharacterTextSplitter:
+        """根据文件类型选择更合适的切块器。"""
         if read_path.endswith(".txt"):
             return self.txt_splitter
         if read_path.endswith(".pdf"):
@@ -65,6 +70,7 @@ class VectorStoreService:
         return self.default_splitter
 
     def _create_vector_store(self):
+        """创建 Chroma 客户端实例。"""
         return Chroma(
             collection_name=self.collection_name,
             embedding_function=get_embedding_model(),
@@ -79,6 +85,7 @@ class VectorStoreService:
         return self.vector_store._collection.count()
 
     def _load_manifest(self) -> dict:
+        """读取知识库 manifest，用于增量同步。"""
         if not os.path.exists(self.manifest_store):
             return {}
         try:
@@ -90,11 +97,13 @@ class VectorStoreService:
             return {}
 
     def _save_manifest(self, manifest: dict):
+        """落盘 manifest，记录每个来源文件的当前状态。"""
         with open(self.manifest_store, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2, sort_keys=True)
 
     @staticmethod
     def _manifest_item(md5_hex: str, chunk_count: int) -> dict:
+        """构造单个知识文件的 manifest 记录。"""
         return {
             "md5": md5_hex,
             "chunk_count": chunk_count,
@@ -102,6 +111,7 @@ class VectorStoreService:
         }
 
     def _sync_manifest_from_legacy_md5(self, manifest: dict):
+        """兼容旧版 md5.txt，避免升级后全部文件被重复视为新文件。"""
         if manifest or not os.path.exists(self.md5_hex_store):
             return manifest
         try:
@@ -126,16 +136,19 @@ class VectorStoreService:
 
     @staticmethod
     def _build_chunk_id(source: str, chunk_index: int, content: str) -> str:
+        """基于来源、位置和内容哈希生成稳定 chunk ID。"""
         digest = hashlib.md5(content.encode("utf-8")).hexdigest()[:12]
         return f"{source}:{chunk_index}:{digest}"
 
     def _delete_documents_by_source(self, source: str):
+        """按来源删除旧切片，保证文件更新时不会残留历史版本。"""
         try:
             self.vector_store.delete(where={"source": source})
         except Exception as e:
             logger.warning(f"按来源删除旧切片失败，source={source}, error={str(e)}")
 
     def _cleanup_stale_documents(self, allowed_files_path: tuple[str, ...]):
+        """清理已经从 data 目录移除，但仍残留在向量库中的旧来源。"""
         existing_sources = {
             os.path.relpath(path, get_abs_path(chroma_conf["data_path"])) for path in allowed_files_path
         }
@@ -200,6 +213,7 @@ class VectorStoreService:
         :return:
         """
         def get_file_document(read_path):
+            """根据文件后缀选择对应的加载器。"""
             if read_path.endswith("txt"):
                 return txt_loader(read_path)
             elif read_path.endswith("pdf"):
@@ -225,6 +239,7 @@ class VectorStoreService:
                     logger.warning(f"文件{path}没有加载到任何文档，可能是格式不受支持")
                     continue
                 documents = normalize_documents(documents)
+                # FAQ/100问类资料优先按问答结构拆分，比纯长度切块更稳定。
                 if relative_source.endswith("100问.txt") or "常见问题" in clean_text(documents[0].page_content[:80]):
                     documents = split_qa_documents(documents)
                 for document in documents:
@@ -245,7 +260,7 @@ class VectorStoreService:
                     )
                     for index, document in enumerate(split_document)
                 ]
-                # DashScope 单次 embedding 批量上限是 10，这里分批写入。
+                # DashScope 单次 embedding 批量上限较小，这里按批次写入更稳。
                 batch_size = 10
                 for i in range(0, len(split_document), batch_size):
                     self.vector_store.add_documents(
@@ -256,7 +271,7 @@ class VectorStoreService:
                 self._save_manifest(manifest)
                 logger.info(f"文件{path}已成功加载到向量数据库中")
             except Exception as e:
-                # exec_info会详细记录报错堆栈
+                # 这里保留 exc_info，方便定位具体是加载、切块还是写库阶段出错。
                 logger.error(f"加载文件{path}到向量数据库失败: {str(e)}", exc_info=True)
                 continue
 
