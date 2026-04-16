@@ -226,19 +226,25 @@
 
 ## 安装方式
 
-### 1. 激活环境
+### 1. 创建 Conda 环境
+
+```powershell
+conda create -n agent310 python=3.10 -y
+```
+
+### 2. 激活环境
 
 ```powershell
 conda activate agent310
 ```
 
-### 2. 安装依赖
+### 3. 安装依赖
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-### 3. 配置环境变量
+### 4. 配置环境变量
 
 ```powershell
 $env:DASHSCOPE_API_KEY="your_api_key_here"

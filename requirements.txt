@@ -1,11 +1,11 @@
-langchain==0.3.7
-langchain-core==0.3.18
-langchain-community==0.3.7
-langgraph==0.2.50
+langchain==1.2.15
+langchain-core==1.2.26
+langchain-community==0.4.1
+langgraph==1.1.6
 
-langchain-chroma==0.1.4
-chromadb==0.5.15
-langchain-text-splitters==0.3.2
+langchain-chroma==1.1.0
+chromadb==1.5.6
+langchain-text-splitters==1.1.1
 
 pypdf==5.1.0
 
