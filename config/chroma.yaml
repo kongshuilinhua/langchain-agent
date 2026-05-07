@@ -1,0 +1,18 @@
+collection_name : agent
+persist_directory : storage/chroma_db
+k :  4
+candidate_k : 10
+min_relevance_score : 0.0
+data_path : data
+md5_hex_store : md5.txt
+manifest_store : storage\knowledge_manifest.json
+allow_knowledge_file_type : ["txt","pdf"]
+
+chunk_size : 240
+chunk_overlap : 40
+txt_chunk_size : 220
+txt_chunk_overlap : 40
+pdf_chunk_size : 420
+pdf_chunk_overlap : 60
+separators : ["\n\n","。",".","?","？","!"," ",""]
+
