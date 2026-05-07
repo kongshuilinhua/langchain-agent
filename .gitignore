@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.idea/
+rag/chroma_db/
+rag/chroma.sqlite3
+rag/chat_history/
+chat_history/
+rag/md5.text
