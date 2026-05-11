@@ -4,6 +4,7 @@ from utils.logger_handler import logger
 
 
 def _load_prompt(config_key: str, prompt_name: str) -> str:
+    """按配置键读取指定提示词文件。"""
     try:
         prompt_path = get_abs_path(prompts_conf[config_key])
     except KeyError as e:
@@ -19,14 +20,17 @@ def _load_prompt(config_key: str, prompt_name: str) -> str:
 
 
 def load_system_prompts():
+    """读取主对话提示词。"""
     return _load_prompt("main_prompt_path", "系统提示词")
 
 
 def load_rag_prompts():
+    """读取 RAG 总结提示词。"""
     return _load_prompt("rag_summarize_prompt_path", "RAG总结提示词")
 
 
 def load_report_prompts():
+    """读取报告生成提示词。"""
     return _load_prompt("report_prompt_path", "报告提示词")
 
 if __name__ == '__main__':

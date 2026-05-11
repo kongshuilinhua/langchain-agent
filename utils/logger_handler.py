@@ -15,18 +15,19 @@ def get_logger(
         file_level: int = logging.DEBUG,
         log_file: str = None,
 ) -> logging.Logger:
+    """创建全局 logger，同时输出到控制台和日志文件。"""
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
-    # 避免重复添加处理器
+    # 避免重复添加处理器，否则在 Streamlit 重跑时会重复打印日志。
     if logger.handlers:
         return logger
-    # 控制台添加Handler
+    # 控制台用于实时观察应用行为。
     console_handler = logging.StreamHandler()
     console_handler.setLevel(console_level)
     console_handler.setFormatter(DEFAULT_LOG_FORMAT)
     logger.addHandler(console_handler)
-    # 文件Handler
+    # 文件日志更适合排查线上/回溯类问题。
     if not log_file:   # 日志文件的存放路径
         log_file = os.path.join(LOG_ROOT, f"{name}_{datetime.now().strftime('%Y%m%d%H%M%S')}.log")
     file_handler = logging.FileHandler(log_file, encoding='utf-8')

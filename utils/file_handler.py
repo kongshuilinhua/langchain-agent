@@ -9,6 +9,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 
 
 def get_file_md5_hex(file_path: str):
+    """计算文件 md5，用于知识库增量入库判断。"""
     if not os.path.exists(file_path):
         logger.error(f"文件不存在: {file_path}")
         return None
@@ -29,6 +30,7 @@ def get_file_md5_hex(file_path: str):
 
 
 def listdir_with_allowed_type(path, allowed_types):
+    """递归扫描目录，只返回允许后缀的文件。"""
     files = []
     if not os.path.isdir(path):
         logger.error(f"路径不是一个目录: {path}")
@@ -42,13 +44,16 @@ def listdir_with_allowed_type(path, allowed_types):
     return tuple(sorted(files))
 
 def pdf_loader(file_path, password=None):
+    """加载 PDF 文件并转成 LangChain Document 列表。"""
     return PyPDFLoader(file_path=file_path, password=password).load()
 
 def txt_loader(file_path):
+    """加载 UTF-8 文本文件并转成 LangChain Document 列表。"""
     return TextLoader(file_path, encoding="utf-8").load()
 
 
 def clean_text(text: str) -> str:
+    """做轻量文本清洗，统一空白、换行和 BOM。"""
     if not text:
         return ""
 
@@ -61,6 +66,7 @@ def clean_text(text: str) -> str:
 
 
 def normalize_documents(documents: list[Document]) -> list[Document]:
+    """对一组文档做统一清洗，并过滤空内容。"""
     normalized = []
     for document in documents:
         cleaned = clean_text(document.page_content)
@@ -72,6 +78,11 @@ def normalize_documents(documents: list[Document]) -> list[Document]:
 
 
 def split_qa_documents(documents: list[Document]) -> list[Document]:
+    """
+    把 FAQ/问答类长文本拆成独立的“问题-答案”文档。
+
+    这样做的目标是提升知识库命中率，避免一整个 FAQ 文件被当成长文切碎后难以命中。
+    """
     qa_documents = []
     pattern = re.compile(
         r"(?ms)(?:^|\n)(?:\d+\.\s*)?(?:\*\*)?(?P<question>[^\n？?]{3,}[？?])(?:\*\*)?\s*\n-\s*(?P<answer>.*?)(?=(?:\n(?:\d+\.\s*)?(?:\*\*)?[^\n？?]{3,}[？?](?:\*\*)?\s*\n-\s)|\Z)"

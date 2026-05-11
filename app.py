@@ -248,9 +248,11 @@ if runtime_issues:
         st.error(issue)
     st.stop()
 
+# Agent 实例只初始化一次，避免每次重跑页面都重新构建模型和工具。
 if "agent" not in st.session_state:
     st.session_state["agent"] = ReactAgent()
 
+# sessions 存的是全部历史会话；current_session_id 指向当前打开的那一个。
 if "sessions" not in st.session_state:
     sessions = sort_sessions(load_sessions())
     if not sessions:
@@ -266,6 +268,7 @@ if "pending_prompt" not in st.session_state:
 
 
 def get_current_session() -> dict:
+    """根据 current_session_id 取当前会话；如果丢失则兜底创建一个新会话。"""
     current_session_id = st.session_state["current_session_id"]
     for session in st.session_state["sessions"]:
         if session["id"] == current_session_id:
@@ -278,6 +281,7 @@ def get_current_session() -> dict:
 
 
 def persist_current_messages(messages: list[dict]) -> None:
+    """把当前会话消息写回内存和本地文件。"""
     current = get_current_session()
     updated = update_session_messages(current, messages)
     st.session_state["sessions"] = sort_sessions(upsert_session(st.session_state["sessions"], updated))
@@ -286,11 +290,13 @@ def persist_current_messages(messages: list[dict]) -> None:
 
 
 def switch_session(session_id: str) -> None:
+    """切换当前会话，同时清空待发送的快捷问题。"""
     st.session_state["current_session_id"] = session_id
     st.session_state["pending_prompt"] = ""
 
 
 def create_new_chat() -> None:
+    """创建新会话并立即切过去。"""
     new_session = create_session()
     st.session_state["sessions"] = sort_sessions(upsert_session(st.session_state["sessions"], new_session))
     st.session_state["current_session_id"] = new_session["id"]
@@ -299,6 +305,7 @@ def create_new_chat() -> None:
 
 
 def delete_current_chat() -> None:
+    """删除当前会话；如果删完为空，则自动补一个空会话。"""
     current_id = st.session_state["current_session_id"]
     sessions = delete_session(st.session_state["sessions"], current_id)
     if not sessions:
@@ -311,6 +318,12 @@ def delete_current_chat() -> None:
 
 
 def split_response_and_references(content: str) -> tuple[str, list[str]]:
+    """
+    把回答正文和“参考来源”拆开。
+
+    RAG 最终返回的是一段完整文本，这里按约定格式拆分，
+    方便前端把正文和引用来源分开展示。
+    """
     if not content:
         return "", []
 
@@ -325,6 +338,7 @@ def split_response_and_references(content: str) -> tuple[str, list[str]]:
 
 
 def render_references(references: list[str]):
+    """把引用来源渲染成标签，并支持展开查看预览片段。"""
     if not references:
         return
 
@@ -346,6 +360,7 @@ def render_references(references: list[str]):
 
 
 def parse_reference_label(reference: str) -> tuple[str, int | None]:
+    """从“文件名 / 文件名 + 页码”格式中解析出来源和页码。"""
     match = re.match(r"^(?P<source>.+?)(?: 第(?P<page>\d+)页)?$", reference.strip())
     if not match:
         return reference.strip(), None
@@ -356,6 +371,12 @@ def parse_reference_label(reference: str) -> tuple[str, int | None]:
 
 @st.cache_data(show_spinner=False)
 def load_reference_preview(reference: str) -> str:
+    """
+    读取引用来源的本地预览片段。
+
+    txt 直接读取文件开头片段；
+    pdf 优先按页码读取对应页内容。
+    """
     source, page = parse_reference_label(reference)
     abs_path = get_abs_path(f"data/{source}")
     if not abs_path or not source:
@@ -383,12 +404,14 @@ def load_reference_preview(reference: str) -> str:
 
 
 def render_message(message: dict):
+    """统一渲染一条消息，自动处理正文和引用来源。"""
     body, references = split_response_and_references(message["content"])
     st.write(body or message["content"])
     render_references(references)
 
 
 with st.sidebar:
+    # 侧边栏负责会话管理，体验上接近常见大模型产品的历史会话区。
     st.markdown("## 会话管理")
     sidebar_action_cols = st.columns(2)
     if sidebar_action_cols[0].button("新建会话", use_container_width=True):
@@ -427,6 +450,7 @@ st.markdown(
 st.write("")
 action_cols = st.columns([1, 1, 4])
 if action_cols[0].button("清空会话"):
+    # 清空的是“当前会话”的消息，不影响其他历史会话。
     persist_current_messages([])
     st.session_state["pending_prompt"] = ""
     st.rerun()
@@ -434,6 +458,7 @@ if action_cols[0].button("清空会话"):
 if action_cols[1].button("重建知识库"):
     try:
         with st.spinner("正在重建知识库，请稍候..."):
+            # 这里直接调用当前运行中的 RAG 服务实例，避免页面重启后才生效。
             rag_service.vector_store.reset_store(clear_md5=True)
             rag_service.vector_store.load_document(force_reload=True)
             rag_service._collection_ready_checked = True
@@ -455,6 +480,7 @@ for col, text in zip(shortcut_cols, shortcuts):
 current_session = get_current_session()
 current_messages = current_session.get("messages", [])
 
+# 页面展示的始终是“当前会话”的消息。
 if not current_messages:
     st.info("可以先试试上面的快捷问题，也可以直接在下方输入你的需求。")
 
@@ -469,12 +495,14 @@ if prompt:
     st.session_state["pending_prompt"] = ""
     with st.chat_message("user", avatar="🧑"):
         st.write(prompt)
+    # 先写入用户消息，再调用 Agent，这样异常时也能保留用户输入。
     current_messages = current_messages + [{"role": "user", "content": prompt}]
     persist_current_messages(current_messages)
 
     response_chunks = []
 
     def capture(generator, cache_list, placeholder):
+        """一边接收流式输出，一边实时刷新前端占位区域。"""
         for chunk in generator:
             cache_list.append(chunk)
             body, _ = split_response_and_references("".join(cache_list))
@@ -493,6 +521,7 @@ if prompt:
         if not response_text:
             response_text = "暂时没有生成有效回答，请重试。"
         else:
+            # 流式阶段只先展示正文，结束后再补渲染来源区，避免中途闪烁。
             body, references = split_response_and_references(response_text)
             response_placeholder.markdown(body or response_text)
             render_references(references)
@@ -502,6 +531,7 @@ if prompt:
         with st.chat_message("assistant", avatar="🤖"):
             st.write(response_text)
 
+    # 最终回答也要落盘，这样刷新页面后仍能恢复完整会话。
     current_messages = current_messages + [{"role": "assistant", "content": response_text}]
     persist_current_messages(current_messages)
     st.rerun()
