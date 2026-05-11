@@ -1,41 +1,33 @@
 from utils.config_handler import prompts_conf
 from utils.path_tool import get_abs_path
 from utils.logger_handler import logger
-def load_system_prompts():
+
+
+def _load_prompt(config_key: str, prompt_name: str) -> str:
     try:
-        system_prompt_path = get_abs_path(prompts_conf['main_prompt_path'])
+        prompt_path = get_abs_path(prompts_conf[config_key])
     except KeyError as e:
-        logger.error(f"系统提示词路径未在配置文件中找到: {str(e)}")
-        raise e
+        logger.error(f"{prompt_name}路径未在配置文件中找到: {str(e)}")
+        raise
+
     try:
-        return open(system_prompt_path, "r", encoding="utf-8").read()
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            return f.read()
     except Exception as e:
-        logger.error(f"加载系统提示词失败: {str(e)}")
-        raise e
+        logger.error(f"加载{prompt_name}失败: {str(e)}")
+        raise
+
+
+def load_system_prompts():
+    return _load_prompt("main_prompt_path", "系统提示词")
+
 
 def load_rag_prompts():
-    try:
-        system_prompt_path = get_abs_path(prompts_conf['rag_summarize_prompt_path'])
-    except KeyError as e:
-        logger.error(f"RAG总结提示词路径未在配置文件中找到: {str(e)}")
-        raise e
-    try:
-        return open(system_prompt_path, "r", encoding="utf-8").read()
-    except Exception as e:
-        logger.error(f"加载RAG总结提示词失败: {str(e)}")
-        raise e
+    return _load_prompt("rag_summarize_prompt_path", "RAG总结提示词")
+
 
 def load_report_prompts():
-    try:
-        system_prompt_path = get_abs_path(prompts_conf['report_prompt_path'])
-    except KeyError as e:
-        logger.error(f"报告提示词路径未在配置文件中找到: {str(e)}")
-        raise e
-    try:
-        return open(system_prompt_path, "r", encoding="utf-8").read()
-    except Exception as e:
-        logger.error(f"加载报告提示词失败: {str(e)}")
-        raise e
+    return _load_prompt("report_prompt_path", "报告提示词")
 
 if __name__ == '__main__':
     print(load_rag_prompts())
