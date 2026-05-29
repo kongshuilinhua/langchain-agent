@@ -60,6 +60,7 @@ def document_payload(document: KnowledgeDocument, chunk_count: int = 0) -> dict:
         "chunk_count": effective_chunk_count,
         "text_preview": text_preview,
         "error_message": getattr(document, "error_message", "") or None,
+        "segment_config": getattr(document, "segment_config", None),
         "created_at": document.created_at.isoformat() if document.created_at else None,
         "updated_at": document.updated_at.isoformat() if getattr(document, "updated_at", None) else None,
     }
