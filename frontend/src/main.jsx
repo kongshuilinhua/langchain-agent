@@ -204,6 +204,12 @@ function App() {
   const canManage = isAdminRole(workspace?.role);
   const canEditActive = !!activeAgent && (canManage || activeAgent.created_by === me?.id);
 
+  async function loadDocuments(kbId) {
+    if (!kbId || !token) return;
+    const data = await api(`/api/knowledge-bases/${kbId}/documents`, { token });
+    setDocuments(data.items || []);
+  }
+
   useEffect(() => {
     function handleAuthExpired() {
       logout();
@@ -856,12 +862,6 @@ function App() {
     } finally {
       setUploadingKnowledgeFile(false);
     }
-  }
-
-  async function loadDocuments(kbId) {
-    if (!kbId || !token) return;
-    const data = await api(`/api/knowledge-bases/${kbId}/documents`, { token });
-    setDocuments(data.items || []);
   }
 
   async function deleteDocument(documentId) {
@@ -2870,12 +2870,15 @@ function KnowledgeWorkspace({
     try {
       const payload = {
         title: pasteFilename || '粘贴文档.txt',
-        text: pasteText,
+        filename: pasteFilename || '粘贴文档.txt',
+        content: pasteText,
+        content_type: 'text/plain',
+        source_type: 'text',
       };
       await api(`/api/knowledge-bases/${kb.id}/documents`, {
         token,
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload,
       });
       // Clear inputs
       setPasteText('');
@@ -3321,7 +3324,7 @@ function ResegmentModal({
                   <span>检索切片保留层级信息</span>
                 </label>
                 <p className="config-help-text">
-                  开启后，切片将带有类似 {"🌳 1.介绍 > 1.1背景"} 的上下文导航路径，极大提高召回准确率。
+                  开启后，切片将带有类似 {`🌳 1.介绍 > 1.1背景`} 的上下文导航路径，极大提高召回准确率。
                 </p>
               </div>
             </div>
