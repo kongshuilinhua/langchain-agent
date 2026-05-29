@@ -6639,10 +6639,13 @@ class AppErrorBoundary extends Component {
   render() {
     if (this.state.error) {
       return (
-        <main className="fatal-error">
+        <main className="fatal-error" style={{ padding: '20px', maxWidth: '800px', margin: '50px auto' }}>
           <h1>页面渲染失败</h1>
-          <p>{this.state.error.message}</p>
-          <button type="button" onClick={() => window.location.reload()}>刷新页面</button>
+          <p style={{ color: '#d9383a', fontWeight: 'bold' }}>{this.state.error.message}</p>
+          <pre style={{ textAlign: 'left', background: '#fafafa', border: '1px solid #eaeaea', borderRadius: '6px', padding: '15px', overflow: 'auto', fontSize: '11px', lineHeight: '1.5', fontFamily: 'monospace', color: '#333' }}>
+            {this.state.error.stack}
+          </pre>
+          <button type="button" onClick={() => window.location.reload()} style={{ marginTop: '15px', padding: '8px 16px', background: '#181b25', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>刷新页面</button>
         </main>
       );
     }
