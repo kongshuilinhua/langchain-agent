@@ -363,15 +363,17 @@ export function ChatComposer({
         handleDrop(event).catch((err) => console.error(err));
       }}
     >
-      {attachments.length > 0 && (
-        <AttachmentPreviewTray attachments={attachments} removeAttachment={removeAttachment} />
-      )}
-      {warningText && (
-        <div className="composer-warning">
-          <AlertTriangle size={14} />
-          <span>{warningText}</span>
-        </div>
-      )}
+      <div className="composer-top-tray" style={{ display: (attachments.length > 0 || warningText) ? 'block' : 'none', width: '100%' }}>
+        {attachments.length > 0 ? (
+          <AttachmentPreviewTray attachments={attachments} removeAttachment={removeAttachment} />
+        ) : null}
+        {warningText ? (
+          <div className="composer-warning" style={{ marginTop: attachments.length > 0 ? '10px' : '0px' }}>
+            <AlertTriangle size={14} />
+            <span>{warningText}</span>
+          </div>
+        ) : null}
+      </div>
       <textarea
         ref={textareaRef}
         className="composer-textarea"

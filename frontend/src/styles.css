@@ -3237,8 +3237,8 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 
 .rich-composer {
   position: relative;
-  display: grid;
-  grid-template-rows: auto auto minmax(42px, auto) auto;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   padding: 14px;
   border: 1px solid #dfe4ef;
