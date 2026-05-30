@@ -796,7 +796,7 @@ export function BuilderView(props) {
           <div className="messages">
             {messages.length <= 1 ? (
               <div className="preview-hero compact">
-                <span className="bot-avatar large">{agentForm.avatar || '66'}</span>
+                <AgentAvatar value={agentForm.avatar} className="bot-avatar large" />
                 <strong>{agentForm.name || '智能体一号'}</strong>
                 <p>{agentForm.opening_message || '你好'}</p>
               </div>
