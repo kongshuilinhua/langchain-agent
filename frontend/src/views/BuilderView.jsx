@@ -14,7 +14,8 @@ import {
   ServerCog,
   FileText,
   X,
-  SquarePen
+  SquarePen,
+  Layers
 } from 'lucide-react';
 import { MessageList } from '../components/MessageList.jsx';
 import { AgentAvatar } from '../components/AgentAvatar.jsx';
