@@ -381,26 +381,17 @@ function insertPromptIntoAgent(setAgentForm, content) {
 function insertPromptAtEditor(ref, setAgentForm, content) {
   const text = String(content || '').trim();
   if (!text) return;
+  
+  // 完全替换现有的提示词系统 Prompt，而非在光标后追加
+  setAgentForm((form) => ({ ...form, system_prompt: text }));
+  
   const element = ref?.current;
-  if (!element) {
-    insertPromptIntoAgent(setAgentForm, text);
-    return;
+  if (element) {
+    window.requestAnimationFrame(() => {
+      element.focus();
+      element.setSelectionRange(text.length, text.length);
+    });
   }
-  const start = element.selectionStart;
-  const end = element.selectionEnd;
-  const current = element.value || '';
-  const hasSelection = Number.isFinite(start) && Number.isFinite(end);
-  const prefix = hasSelection ? current.slice(0, start) : current;
-  const suffix = hasSelection ? current.slice(end) : '';
-  const before = prefix && !prefix.endsWith('\n') ? `${prefix}\n\n` : prefix;
-  const after = suffix && !suffix.startsWith('\n') ? `\n\n${suffix}` : suffix;
-  const nextValue = `${before}${text}${after}`;
-  const cursor = `${before}${text}`.length;
-  setAgentForm((form) => ({ ...form, system_prompt: nextValue }));
-  window.requestAnimationFrame(() => {
-    element.focus();
-    element.setSelectionRange(cursor, cursor);
-  });
 }
 
 function joinPromptText(current, addition) {
