@@ -795,14 +795,11 @@ export function BuilderView(props) {
           </header>
           <div className="messages">
             {messages.length <= 1 ? (
-              <>
-                <div className="preview-hero compact">
-                  <span className="bot-avatar large">{agentForm.avatar || '66'}</span>
-                  <strong>{agentForm.name || '智能体一号'}</strong>
-                  <p>{agentForm.opening_message || '你好'}</p>
-                </div>
-                <MessageList messages={SAMPLE_MESSAGES} avatar={agentForm.avatar || '66'} />
-              </>
+              <div className="preview-hero compact">
+                <span className="bot-avatar large">{agentForm.avatar || '66'}</span>
+                <strong>{agentForm.name || '智能体一号'}</strong>
+                <p>{agentForm.opening_message || '你好'}</p>
+              </div>
             ) : (
               <MessageList messages={messages} feedbackByMessage={feedbackByMessage} submitFeedback={submitFeedback} avatar={activeAgent?.avatar || agentForm.avatar || 'AI'} />
             )}
