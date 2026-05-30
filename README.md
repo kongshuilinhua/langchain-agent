@@ -222,48 +222,7 @@ UPLOAD_MAX_BYTES=8388608          # 上传文件大小上限
 
 ## 快速启动
 
-### 方式一：Docker Compose 一键部署（推荐）
-
-`docker-compose.yml` 定义了全部 5 个服务，一条命令全部启动：
-
-```powershell
-# 1. 配置 LLM API Key
-Copy-Item .env.example .env
-# 编辑 .env，至少填写 DASHSCOPE_API_KEY（或 OPENAI_API_KEY）
-
-# 2. 一键启动
-docker compose up -d
-```
-
-这会在 Docker 中启动：
-
-| 服务 | 镜像 | 端口 |
-|------|------|------|
-| PostgreSQL 16 | `postgres:16-alpine` | `5433:5432` |
-| Redis 7 | `redis:7-alpine` | `6380:6379` |
-| Milvus | `milvusdb/milvus:v2.5.4` | `19530:19530` |
-| API（FastAPI） | 从 `Dockerfile.api` 构建 | `8000:8000` |
-| 前端（Vue 3） | 从 `frontend/Dockerfile` 构建 | `5174:5174` |
-
-关键环境变量已在 `docker-compose.yml` 中配好：
-- `DATABASE_URL` 指向容器内的 `postgres:5432`
-- `REDIS_URL` 指向 `redis:6379`
-- `LINGSHU_VECTOR_BACKEND=milvus` + `MILVUS_URI=http://milvus:19530`
-- LLM 相关变量从 `.env` 传入（`OPENAI_API_KEY`、`OPENAI_MODEL` 等）
-
-```powershell
-# 常用命令
-docker compose ps          # 查看所有服务状态
-docker compose logs api    # 查看 API 日志
-docker compose down        # 停止并删除所有容器
-docker compose down -v     # 同时删除数据卷（PostgreSQL + Milvus 数据会丢失）
-```
-
-### 方式二：手动启动（前端/后端开发调试）
-
-适合需要热重载、频繁改代码的开发场景。
-
-**基础环境**
+### 基础环境
 
 ```powershell
 conda create -n lingshu python=3.11 -y
@@ -271,15 +230,15 @@ conda activate lingshu
 node --version   # 确认 >= 18（https://nodejs.org/）
 ```
 
-**基础设施（用 Docker 只跑数据库，API 和前端手动跑）**
+### 基础设施（用 Docker 只跑数据库，API 和前端手动跑）
 
 ```powershell
-# 只启动 postgres + redis + milvus，不启动 api 和 frontend
+# 启动 postgres + redis + milvus
 docker compose up -d postgres redis milvus
 ```
 
 ```env
-# .env 中的连接地址指向本地 Docker 端口
+# .env 中的连接地址指向 docker-compose 映射的本地端口
 DATABASE_URL=postgresql+psycopg2://lingshu:lingshu@localhost:5433/lingshu_agent
 REDIS_URL=redis://localhost:6380/0
 LINGSHU_VECTOR_BACKEND=milvus
@@ -288,14 +247,15 @@ MILVUS_URI=http://localhost:19530
 
 如果没有 Docker，也可以单独安装 PostgreSQL / Redis / Milvus，或者开发阶段用内存向量模式（`LINGSHU_VECTOR_BACKEND=memory`），不装 Milvus 和 Redis 也能跑。
 
-**后端**
+### 后端
 
 ```powershell
+Copy-Item .env.example .env          # 编辑 .env，填写 DASHSCOPE_API_KEY
 pip install -r requirements.txt
 uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-**前端**
+### 前端
 
 ```powershell
 cd frontend
