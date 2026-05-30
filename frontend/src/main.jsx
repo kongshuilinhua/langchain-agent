@@ -811,6 +811,19 @@ function App() {
     return data.knowledge_base;
   }
 
+  async function updateKnowledgeBase(kbId, payload) {
+    const body = {
+      name: String(payload?.name || '').trim(),
+      description: String(payload?.description || '').trim(),
+    };
+    if (!body.name) {
+      throw new Error('知识库名称不能为空。');
+    }
+    const data = await api(`/api/knowledge-bases/${kbId}`, { token, method: 'PUT', body });
+    await bootstrap();
+    return data.knowledge_base;
+  }
+
   async function uploadDocument() {
     const kbId = Number(docForm.kb_id || knowledgeBases[0]?.id);
     if (!kbId) {
@@ -1283,6 +1296,7 @@ function App() {
     copyBuiltinPromptTemplate,
     createAgent,
     createKnowledgeBase,
+    updateKnowledgeBase,
     createModelConfig,
     createPromptTemplate,
     createToolConfig,
@@ -1448,6 +1462,7 @@ function HomeView(props) {
     copyMarketAgent,
     createAgent,
     createKnowledgeBase,
+    updateKnowledgeBase,
     createModelConfig,
     createPromptTemplate,
     createToolConfig,
@@ -1802,6 +1817,7 @@ function HomeView(props) {
           <KnowledgeHome
             canManage={canManage}
             createKnowledgeBase={createKnowledgeBase}
+            updateKnowledgeBase={updateKnowledgeBase}
             deleteDocument={deleteDocument}
             deleteKnowledgeBase={deleteKnowledgeBase}
             docForm={docForm}
@@ -2211,6 +2227,7 @@ function SecretInputDialog({ label = '密钥', message, onCancel, onSubmit, plac
 function KnowledgeHome({
   canManage,
   createKnowledgeBase,
+  updateKnowledgeBase,
   deleteDocument,
   deleteKnowledgeBase,
   docForm,
@@ -2295,6 +2312,7 @@ function KnowledgeHome({
           kb={selectedKb}
           documents={documents}
           deleteDocument={deleteDocument}
+          updateKnowledgeBase={updateKnowledgeBase}
           uploadDocument={uploadDocument}
           uploadKnowledgeFile={uploadKnowledgeFile}
           uploadingKnowledgeFile={uploadingKnowledgeFile}
@@ -2486,6 +2504,7 @@ function KnowledgeWorkspace({
   kb,
   documents,
   deleteDocument,
+  updateKnowledgeBase,
   uploadDocument,
   uploadKnowledgeFile,
   uploadingKnowledgeFile,
@@ -2501,6 +2520,31 @@ function KnowledgeWorkspace({
   const [docSearchQuery, setDocSearchQuery] = useState('');
   const [addDropdownOpen, setAddDropdownOpen] = useState(false);
   const [customInputOpen, setCustomInputOpen] = useState(false);
+
+  const [isEditingKb, setIsEditingKb] = useState(false);
+  const [editKbName, setEditKbName] = useState(kb?.name || '');
+  const [editKbDesc, setEditKbDesc] = useState(kb?.description || '');
+
+  useEffect(() => {
+    if (kb) {
+      setEditKbName(kb.name || '');
+      setEditKbDesc(kb.description || '');
+    }
+  }, [kb]);
+
+  async function handleSaveKbInfo(e) {
+    if (e) e.preventDefault();
+    if (!editKbName.trim()) return;
+    try {
+      await updateKnowledgeBase(kb.id, {
+        name: editKbName.trim(),
+        description: editKbDesc.trim()
+      });
+      setIsEditingKb(false);
+    } catch (err) {
+      console.error(err);
+    }
+  }
 
   const [chunks, setChunks] = useState([]);
   const [chunksLoading, setChunksLoading] = useState(false);
@@ -2605,10 +2649,119 @@ function KnowledgeWorkspace({
         <button className="btn-back" type="button" onClick={handleBack}>
           <ChevronLeft size={16} />返回列表
         </button>
-        <div className="workspace-kb-title-block">
-          <h3>{kb?.name}</h3>
-          <p>{kb?.description || '暂无描述'}</p>
-        </div>
+        {isEditingKb ? (
+          <form className="workspace-kb-edit-form" onSubmit={handleSaveKbInfo} style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '240px' }}>
+            <input
+              type="text"
+              value={editKbName}
+              onChange={(e) => setEditKbName(e.target.value)}
+              placeholder="知识库名称"
+              maxLength={100}
+              required
+              style={{
+                padding: '4px 8px',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                borderRadius: '4px',
+                border: '1px solid #dfe4ef',
+                background: '#ffffff',
+                color: '#111827',
+                width: '240px'
+              }}
+            />
+            <input
+              type="text"
+              value={editKbDesc}
+              onChange={(e) => setEditKbDesc(e.target.value)}
+              placeholder="知识库描述"
+              maxLength={200}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                borderRadius: '4px',
+                border: '1px solid #dfe4ef',
+                background: '#ffffff',
+                color: '#667085',
+                width: '240px'
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
+              <button 
+                type="submit" 
+                className="primary small" 
+                style={{ 
+                  fontSize: '11px', 
+                  padding: '2px 8px', 
+                  borderRadius: '4px', 
+                  background: '#4d43e6', 
+                  color: '#ffffff',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                保存
+              </button>
+              <button 
+                type="button" 
+                className="secondary small" 
+                style={{ 
+                  fontSize: '11px', 
+                  padding: '2px 8px', 
+                  borderRadius: '4px', 
+                  background: '#ffffff', 
+                  color: '#667085',
+                  border: '1px solid #dfe4ef',
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }} 
+                onClick={() => setIsEditingKb(false)}
+              >
+                取消
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="workspace-kb-title-block" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#111827' }}>{kb?.name}</h3>
+                <button
+                  type="button"
+                  className="coze-icon-button"
+                  title="编辑名称和描述"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: '2px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: '#667085',
+                    borderRadius: '4px',
+                    transition: 'all 0.2s'
+                  }}
+                  onClick={() => {
+                    setEditKbName(kb?.name || '');
+                    setEditKbDesc(kb?.description || '');
+                    setIsEditingKb(true);
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = '#4d43e6';
+                    e.currentTarget.style.background = '#f4f4f5';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = '#667085';
+                    e.currentTarget.style.background = 'none';
+                  }}
+                >
+                  <SquarePen size={14} />
+                </button>
+              </div>
+              <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#667085' }}>{kb?.description || '暂无描述'}</p>
+            </div>
+          </div>
+        )}
         <div className="workspace-header-actions">
           <button
             className="primary"

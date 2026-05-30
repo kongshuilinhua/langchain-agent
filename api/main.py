@@ -1072,6 +1072,17 @@ def delete_kb(kb_id: int, membership: WorkspaceMember = Depends(get_current_memb
     return {"deleted": True}
 
 
+@app.put("/api/knowledge-bases/{kb_id}")
+def update_kb(kb_id: int, request: KnowledgeBaseCreateRequest, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
+    kb = require_workspace_kb(db, membership.workspace_id, kb_id)
+    require_kb_write_access(kb, membership)
+    kb.name = request.name
+    kb.description = request.description
+    db.commit()
+    db.refresh(kb)
+    return {"knowledge_base": knowledge_base_summary(kb)}
+
+
 @app.get("/api/knowledge-bases/{kb_id}/documents/{document_id}/chunks")
 def get_document_chunks(kb_id: int, document_id: int, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
     kb = require_workspace_kb(db, membership.workspace_id, kb_id)
