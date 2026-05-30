@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
 
 # 虚拟环境
 .venv/
@@ -10,9 +11,13 @@ env/
 
 # 本地环境变量
 .env
+.env.local
+frontend/.env.local
 
 # IDE 配置
 .idea/
+.vs/
+.vscode/
 
 # 日志与运行产物
 logs/
@@ -28,3 +33,17 @@ md5.txt
 # 本地聊天记录
 chat_history/
 rag/chat_history/
+
+# 前端依赖与构建产物
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/design-preview.html
+frontend/design-previews/
+
+# 评测输出
+eval/reports/
+
+# 系统临时文件
+.DS_Store
+Thumbs.db

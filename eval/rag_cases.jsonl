@@ -1,0 +1,2 @@
+{"id":"hybrid-basic","question":"hybrid-source-token 是什么？","expected_sources":["hybrid.txt"],"keywords":["hybrid-source-token"],"should_refuse":false}
+{"id":"no-evidence","question":"知识库没有的随机问题 zzz-final-missing","expected_sources":[],"keywords":[],"should_refuse":true}

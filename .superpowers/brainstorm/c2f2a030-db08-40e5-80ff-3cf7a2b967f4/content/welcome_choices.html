@@ -1,0 +1,74 @@
+<h2>Coze 风格知识库设计探索</h2>
+<p class="subtitle">请在下方选择我们本次设计工作的切入点，或者直接在终端中回复我。</p>
+
+<div class="options">
+  <div class="option" data-choice="list" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>知识库列表主页 (Dashboard)</h3>
+      <p>重构当前的“知识库”主页，采用类似 Coze 资源库的卡片/表格混合布局。包含：分类标签页（插件/工作流/知识库）、全局搜索、多维度筛选、导入/新建资源、以及状态启用开关和快捷操作菜单。</p>
+    </div>
+  </div>
+  
+  <div class="option" data-choice="details" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>知识库详情与文档工作台 (Workspace)</h3>
+      <p>重新设计进入特定知识库后的内页，支持分栏工作台布局。左栏为文档列表（带搜索），右栏为文档详情预览/编辑区（带分段展示与添加内容下拉菜单）。</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="both" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>整体全套方案 (Full Suite)</h3>
+      <p>列表主页与详情工作台一同进行，打造最完整的 Coze 知识库用户体验。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem;">
+  <h3>视觉方案对比预览</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">列表页布局示意</div>
+      <div class="mockup-body" style="padding: 1.5rem; background: #fafbfc; min-height: 180px;">
+        <div class="mock-nav" style="margin-bottom: 1rem; padding: 0.5rem; font-size: 11px; background: #fff; border: 1px solid #e3e8ff;">全部 | 插件 | 工作流 | <b style="color: #4f46e5;">知识库</b> | 提示词</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+          <input class="mock-input" style="width: 120px; font-size: 10px; padding: 0.2rem;" placeholder="搜索资源..." readonly />
+          <button class="mock-button" style="padding: 0.2rem 0.6rem; font-size: 10px; background: #4f46e5; color: #fff;">+ 资源</button>
+        </div>
+        <div style="border: 1px solid #eaecf0; border-radius: 6px; background: #fff; font-size: 11px; padding: 0.5rem;">
+          <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #f2f4f7; padding-bottom: 0.3rem; margin-bottom: 0.3rem;">
+            <span>📄 【扣子小助手】产品文档</span>
+            <span style="color: #667085;">扣子知识库 · 2026-05-22</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>📊 FAQ 更新表</span>
+            <span style="color: #667085;">扣子知识库 · 2026-05-22</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="mockup">
+      <div class="mockup-header">详情工作台布局示意</div>
+      <div class="mockup-body" style="padding: 1.5rem; background: #fafbfc; min-height: 180px; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; font-size: 11px; padding-bottom: 0.5rem; border-bottom: 1px solid #eaecf0; margin-bottom: 0.5rem;">
+          <span>⬅️ <b>【扣子小助手】产品文档</b></span>
+          <button class="mock-button" style="padding: 0.1rem 0.4rem; font-size: 9px; background: #4f46e5; color: #fff;">添加内容 ▾</button>
+        </div>
+        <div style="display: flex; flex: 1; gap: 8px;">
+          <div class="mock-sidebar" style="width: 35%; padding: 0.3rem; font-size: 10px; background: #fff;">
+            📄 Message object.md<br/>
+            📄 Web SDK.md
+          </div>
+          <div class="mock-content" style="flex: 1; padding: 0.3rem; font-size: 10px; background: #fff; overflow-y: auto;">
+            <h4>Message object.md</h4>
+            <p style="color: #667085; font-size: 9px;">本期将展示该文档的具体分段和内容详情...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

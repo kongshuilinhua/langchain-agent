@@ -404,23 +404,41 @@ def split_by_hierarchy(
         return []
 
     heading_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
-    matches = list(heading_pattern.finditer(cleaned))
+    all_matches = list(heading_pattern.finditer(cleaned))
 
-    if not matches:
+    if not all_matches:
         # 退化策略：无标题则调用默认 parent-child 块拆分
         return split_parent_child(cleaned, kb_id=kb_id, document_id=document_id)
 
+    # 预先过滤出符合层级要求的标题
+    matches = [m for m in all_matches if len(m.group(1)) <= max_level]
+
+    if not matches:
+        # 如果过滤后无标题，同样退化
+        return split_parent_child(cleaned, kb_id=kb_id, document_id=document_id)
+
     chunks = []
+    
+    # 提取第一个标题之前的“前言/介绍”文本，防止这部分数据丢失
+    first_heading_start = matches[0].start()
+    intro_text = cleaned[0:first_heading_start].strip()
+    if intro_text:
+        parent_id = f"kb{kb_id}-doc{document_id}-intro"
+        chunks.append({
+            "parent_id": parent_id,
+            "chunk_id": f"{parent_id}-chunk-intro",
+            "text": intro_text,
+            "page": None,
+            "section": "前言" if keep_hierarchy_info else "",
+            "content_hash": hashlib.sha256(intro_text.encode("utf-8")).hexdigest(),
+        })
+
     # 层级路径栈，记录当前的 [h1, h2, h3...] 标题内容
     path_stack = []
 
     for i, match in enumerate(matches):
         level = len(match.group(1)) # 几层 # 号
         heading_text = match.group(2).strip()
-        
-        # 根据最大层级截断
-        if level > max_level:
-            continue
 
         # 计算正文起止点
         start_pos = match.end()

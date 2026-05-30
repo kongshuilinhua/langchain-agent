@@ -1,0 +1,461 @@
+<h2>Coze 风格“重新分段”与预览交互设计</h2>
+<p class="subtitle">我们在详情工作台中加入了<strong>“重新分段”</strong>核心交互。点击下方选项加载，体验完整预览效果。</p>
+
+<style>
+  /* 仿真详情工作台背景 */
+  .mock-detail-workspace {
+    position: relative;
+    border: 1px solid #eaecf0;
+    border-radius: 12px;
+    height: 520px;
+    background: #fff;
+    display: flex;
+    overflow: hidden;
+    filter: blur(1px); /* 背景微弱模糊，突出弹窗 */
+    pointer-events: none;
+  }
+  
+  .mock-ws-left {
+    width: 240px;
+    border-right: 1px solid #eaecf0;
+    background: #f9fafb;
+    padding: 0.75rem;
+  }
+  
+  .mock-ws-right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  /* 模态弹窗遮罩层 */
+  .coze-modal-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(16, 24, 40, 0.4);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+  }
+  
+  /* Coze 重新分段模态框 */
+  .coze-resegment-modal {
+    background: #fff;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 680px;
+    max-height: 90%;
+    box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.1), 0 8px 8px -4px rgba(16, 24, 40, 0.04);
+    border: 1px solid #eaecf0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: zoomIn 0.2s ease-out;
+  }
+  
+  @keyframes zoomIn {
+    from { transform: scale(0.95); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+  
+  .coze-modal-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #eaecf0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .coze-modal-body {
+    padding: 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  
+  .coze-modal-footer {
+    padding: 1rem 1.5rem;
+    border-top: 1px solid #eaecf0;
+    background: #f9fafb;
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+  
+  /* 策略卡片样式 */
+  .strategy-group {
+    border: 1px solid #eaecf0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  
+  .strategy-header {
+    background: #f9fafb;
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #344054;
+    border-bottom: 1px solid #eaecf0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+  }
+  
+  .strategy-header.active {
+    border-left: 3px solid #4f46e5;
+    background: #f5f6ff;
+  }
+  
+  .strategy-body {
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: #475467;
+  }
+  
+  /* 输入控制样式 */
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  
+  .form-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  
+  .form-item label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #344054;
+  }
+  
+  .coze-input {
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+    color: #344054;
+    outline: none;
+  }
+  
+  .coze-input:focus {
+    border-color: #4f46e5;
+    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+  }
+  
+  .checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: #344054;
+    cursor: pointer;
+  }
+  
+  /* 分段效果预览区域 */
+  .preview-section {
+    border: 1px solid #e0e7ff;
+    background: #fafbff;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 0.5rem;
+  }
+  
+  .preview-chunks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 180px;
+    overflow-y: auto;
+    margin-top: 0.5rem;
+  }
+  
+  .preview-chunk-item {
+    background: #fff;
+    border: 1px solid #eaecf0;
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.75rem;
+    color: #344054;
+    line-height: 1.5;
+  }
+  
+  .preview-chunk-badge {
+    background: #e0e7ff;
+    color: #3538cd;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: inline-block;
+  }
+</style>
+
+<div style="position: relative; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: #eaecf0;">
+  <!-- 背景：文档工作台 -->
+  <div class="mock-detail-workspace">
+    <div class="mock-ws-left">
+      <div class="mock-input" style="font-size:0.75rem; margin-bottom: 0.5rem;" placeholder="🔍 搜索文档...">Message object.md</div>
+      <div style="background:#e0e7ff; padding:0.5rem; border-radius:6px; font-size:0.75rem; color:#4f46e5; font-weight:500;">📄 Message object.md</div>
+      <div style="padding:0.5rem; font-size:0.75rem; color:#667085; margin-top:2px;">📄 Web SDK.md</div>
+    </div>
+    <div class="mock-ws-right">
+      <div style="padding:1rem; border-bottom:1px solid #eaecf0; display:flex; justify-content:space-between;">
+        <strong>Message object.md</strong>
+        <button class="mock-button" style="padding: 0.2rem 0.5rem; font-size:10px;">添加内容 ▾</button>
+      </div>
+      <div style="padding:1.5rem; color:#86868b; font-size:0.8rem;">文档预览与切片内容载入中...</div>
+    </div>
+  </div>
+  
+  <!-- 前台：重新分段配置模态框 -->
+  <div class="coze-modal-overlay">
+    <div class="coze-resegment-modal">
+      <!-- 头部 -->
+      <div class="coze-modal-header">
+        <div style="display:flex; flex-direction:column;">
+          <span style="font-weight:600; font-size:0.95rem; color:#101828;">重新分段策略配置</span>
+          <span style="font-size:0.75rem; color:#667085; margin-top:2px;">调整解析和分段策略后，点击下方的“预览分段”可实时查看切片效果</span>
+        </div>
+        <button class="coze-btn" style="border:none; padding:4px; border-radius:50%; width:28px; height:28px; display:flex; align-items:center; justify-content:center;">✕</button>
+      </div>
+      
+      <!-- 体部 -->
+      <div class="coze-modal-body">
+        <!-- 1. 解析策略 -->
+        <div>
+          <span class="label" style="display:block; margin-bottom:6px; color:#344054;">1. 解析策略</span>
+          <div style="display:flex; gap:12px; margin-bottom: 0.75rem;">
+            <button class="coze-btn coze-btn-primary" id="btn-parse-precise" onclick="switchParse('precise')" style="padding:0.4rem 1.2rem;">✨ 精准解析</button>
+            <button class="coze-btn" id="btn-parse-fast" onclick="switchParse('fast')" style="padding:0.4rem 1.2rem;">⚡ 快速解析</button>
+          </div>
+          
+          <div class="strategy-group" id="precise-options">
+            <div class="strategy-body">
+              <span style="font-size:0.75rem; color:#667085;">精准提取文档中的多维度细节，支持复杂布局与格式（耗时略长）：</span>
+              <div style="display:flex; gap:16px; margin: 4px 0;">
+                <label class="checkbox-item"><input type="checkbox" checked /> 图片元素</label>
+                <label class="checkbox-item"><input type="checkbox" checked /> 扫描件 (OCR)</label>
+                <label class="checkbox-item"><input type="checkbox" /> 表格元素</label>
+              </div>
+              <div class="form-item">
+                <label>过滤多余冗余字符 (正则过滤)</label>
+                <input class="coze-input" placeholder="输入您需要过滤的字符，例如：\\[[0-9]+\\]" />
+              </div>
+            </div>
+          </div>
+          
+          <div class="strategy-group" id="fast-options" style="display: none;">
+            <div class="strategy-body" style="background: #fafafa;">
+              <span style="color:#667085;">直接对文档进行纯文本提取（速度极快，适用于无图表的纯文字 Markdown/TXT 文档）。</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 2. 分段策略 -->
+        <div>
+          <span class="label" style="display:block; margin-bottom:6px; color:#344054;">2. 分段策略</span>
+          <div style="display:flex; gap:12px; margin-bottom: 0.75rem;">
+            <button class="coze-btn" id="btn-seg-auto" onclick="switchSeg('auto')" style="padding:0.4rem 1.2rem;">🤖 自动分段与清洗</button>
+            <button class="coze-btn coze-btn-primary" id="btn-seg-custom" onclick="switchSeg('custom')" style="padding:0.4rem 1.2rem;">🛠️ 自定义切分</button>
+          </div>
+          
+          <!-- 自动分段 -->
+          <div class="strategy-group" id="auto-seg-options" style="display: none;">
+            <div class="strategy-body" style="background:#fafafa;">
+              <span>系统将根据段落标识符与自适应模型自动判断每段逻辑起止点，适合普通叙述文。</span>
+            </div>
+          </div>
+          
+          <!-- 自定义分段 -->
+          <div class="strategy-group" id="custom-seg-options">
+            <div class="strategy-body">
+              <div class="form-row">
+                <div class="form-item">
+                  <label>分段标识符 <b>*</b></label>
+                  <select class="coze-filter-select" style="padding: 0.4rem;" id="seg-delimiter-select" onchange="updateDelimiterHint(this.value)">
+                    <option value="##">## (Markdown 二级标题)</option>
+                    <option value="\n\n">\n\n (双换行符/空行)</option>
+                    <option value="custom">自定义符号</option>
+                  </select>
+                </div>
+                <div class="form-item" id="custom-delimiter-input-row" style="display:none;">
+                  <label>自定义符号内容</label>
+                  <input class="coze-input" id="custom-delimiter-val" value="###" />
+                </div>
+              </div>
+              <div class="form-row" style="margin-top: 8px;">
+                <div class="form-item">
+                  <label>单段最大长度（字符） <b>*</b></label>
+                  <input class="coze-input" type="number" id="max-chunk-len" value="5000" oninput="calculatePreview()" />
+                </div>
+                <div class="form-item">
+                  <label>分段重叠度（%） <b>*</b></label>
+                  <input class="coze-input" type="number" id="overlap-pct" value="10" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 实时分段效果预览区 -->
+        <div class="preview-section" id="preview-area" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <strong style="font-size:0.8rem; color:#1e1b4b;">📊 实时分段效果预览</strong>
+            <span style="font-size:0.75rem; color:#4f46e5; font-weight:600;" id="preview-stats-label">预计切分：4 个分段</span>
+          </div>
+          
+          <div class="preview-chunks-list" id="chunks-list-body">
+            <!-- JS 渲染预览分段 -->
+          </div>
+        </div>
+      </div>
+      
+      <!-- 尾部 -->
+      <div class="coze-modal-footer">
+        <button class="coze-btn" style="padding:0.45rem 1.2rem;">取消</button>
+        <button class="coze-btn" style="background:#e0e7ff; color:#3538cd; border-color:#c7d2fe; padding:0.45rem 1.2rem;" onclick="triggerPreview()">🔍 预览分段效果</button>
+        <button class="coze-btn coze-btn-primary" style="padding:0.45rem 1.2rem;" onclick="saveResegment()">💾 确认并重新索引</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentParseMode = 'precise';
+  let currentSegMode = 'custom';
+  
+  function switchParse(mode) {
+    currentParseMode = mode;
+    const preciseBtn = document.getElementById('btn-parse-precise');
+    const fastBtn = document.getElementById('btn-parse-fast');
+    const preciseOpts = document.getElementById('precise-options');
+    const fastOpts = document.getElementById('fast-options');
+    
+    if (mode === 'precise') {
+      preciseBtn.classList.add('coze-btn-primary');
+      fastBtn.classList.remove('coze-btn-primary');
+      preciseOpts.style.display = 'block';
+      fastOpts.style.display = 'none';
+    } else {
+      preciseBtn.classList.remove('coze-btn-primary');
+      fastBtn.classList.add('coze-btn-primary');
+      preciseOpts.style.display = 'none';
+      fastOpts.style.display = 'block';
+    }
+    calculatePreview();
+  }
+  
+  function switchSeg(mode) {
+    currentSegMode = mode;
+    const autoBtn = document.getElementById('btn-seg-auto');
+    const customBtn = document.getElementById('btn-seg-custom');
+    const autoOpts = document.getElementById('auto-seg-options');
+    const customOpts = document.getElementById('custom-seg-options');
+    
+    if (mode === 'auto') {
+      autoBtn.classList.add('coze-btn-primary');
+      customBtn.classList.remove('coze-btn-primary');
+      autoOpts.style.display = 'block';
+      customOpts.style.display = 'none';
+    } else {
+      autoBtn.classList.remove('coze-btn-primary');
+      customBtn.classList.add('coze-btn-primary');
+      autoOpts.style.display = 'none';
+      customOpts.style.display = 'block';
+    }
+    calculatePreview();
+  }
+  
+  function updateDelimiterHint(val) {
+    const customInput = document.getElementById('custom-delimiter-input-row');
+    if (val === 'custom') {
+      customInput.style.display = 'flex';
+    } else {
+      customInput.style.display = 'none';
+    }
+    calculatePreview();
+  }
+  
+  function triggerPreview() {
+    const previewArea = document.getElementById('preview-area');
+    previewArea.style.display = 'block';
+    calculatePreview();
+  }
+  
+  function calculatePreview() {
+    const listBody = document.getElementById('chunks-list-body');
+    const statsLabel = document.getElementById('preview-stats-label');
+    const maxLen = Number(document.getElementById('max-chunk-len').value) || 5000;
+    
+    let delimiter = document.getElementById('seg-delimiter-select').value;
+    if (delimiter === 'custom') {
+      delimiter = document.getElementById('custom-delimiter-val').value;
+    }
+    
+    // 根据参数，动态“模拟”生成切分段落
+    let mockChunks = [];
+    if (currentSegMode === 'auto') {
+      mockChunks = [
+        "span对象代表一条消息内容。参数：role (String) 说明：发送该消息的实体。取值如下。当 type = answer 时，消息内容格式为 Markdown，即 Bot 的最终回复内容格式是 Markdown，不是纯文本。",
+        "user: 代表该消息内容是用户发送的。assistant: 代表该消息内容是 Bot 发送的。content: 消息内容。content_type: 消息内容的类型。值：text: 文本类型。"
+      ];
+    } else {
+      // 自定义模式
+      if (delimiter === '##') {
+        mockChunks = [
+          "message对象代表一条消息内容。 | 参数 | 类型 | 说明 |\n| --- | --- | --- |\n| role | String | 发送该消息的实体。取值：",
+          "* **user**: 代表该消息内容是用户发送的。\n* **assistant**: 代表该消息内容是 Bot 发送的。\n| content | String | 消息内容。 |\n| content_type | String | 消息内容的类型，取值：\n* **text**: 文本类型。",
+          "当 type = **answer** 时，消息内容格式为 Markdown，即 Bot 的最终回复内容格式是 Markdown，不是纯文本。"
+        ];
+      } else {
+        // 双换行或其它
+        mockChunks = [
+          "message对象代表一条消息内容。\n\n| 参数 | 类型 | 说明 |\n| --- | --- | --- |",
+          "| role | String | 发送该消息的实体。取值：\n* **user**: 代表该消息内容是用户发送的。\n* **assistant**: 代表该消息内容是 Bot 发送的。",
+          "| content | String | 消息内容。\n| content_type | String | 消息内容的类型，取值：\n* **text**: 文本类型。",
+          "当 type = **answer** 时，消息内容格式为 Markdown，即 Bot 的最终回复内容格式是 Markdown，不是纯文本。"
+        ];
+      }
+    }
+    
+    // 如果长度限制很小，模拟切得更碎
+    if (maxLen < 80) {
+      statsLabel.textContent = `预计切分：6 个分段 (单段字数超限自适应切分)`;
+      listBody.innerHTML = `
+        <div class="preview-chunk-item"><span class="preview-chunk-badge">分段 #1 · 72字</span><br/>message对象代表一条消息内容。</div>
+        <div class="preview-chunk-item"><span class="preview-chunk-badge">分段 #2 · 60字</span><br/>| 参数 | 类型 | 说明 |</div>
+        <div class="preview-chunk-item"><span class="preview-chunk-badge">分段 #3 · 68字</span><br/>| role | String | 发送该消息的实体。</div>
+        <div class="preview-chunk-item"><span class="preview-chunk-badge">分段 #4 · 79字</span><br/>* **user**: 代表该消息内容是用户发送的。</div>
+        <div class="preview-chunk-item"><span class="preview-chunk-badge">分段 #5 · 75字</span><br/>* **assistant**: 代表该消息内容是 Bot 发送的。</div>
+        <div class="preview-chunk-item"><span class="preview-chunk-badge">分段 #6 · 50字</span><br/>当 type = answer 时，最终回复格式是 Markdown。</div>
+      `;
+    } else {
+      statsLabel.textContent = `预计切分：${mockChunks.length} 个分段`;
+      listBody.innerHTML = mockChunks.map((text, idx) => `
+        <div class="preview-chunk-item">
+          <span class="preview-chunk-badge">分段 #${idx + 1} · ${text.length}字</span>
+          <div style="white-space: pre-wrap;">${text}</div>
+        </div>
+      `).join('');
+    }
+  }
+  
+  function saveResegment() {
+    alert("💾 重新分段策略保存成功！后台正在根据新规则重新执行向量化与切片计算...");
+  }
+  
+  // 首次运行计算
+  calculatePreview();
+</script>
