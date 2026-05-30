@@ -1,72 +1,77 @@
 # Lingshu Agent
 
-Lingshu Agent 是一个本地可运行的自定义智能体平台。当前最终版提供 GPT 风格主聊天页、Coze 风格智能体配置页、用户私有模型配置、知识库 RAG、工具、发布审核、内部市场复制、会话恢复、头像和个人资料等闭环能力。
+---
 
-默认推荐 Qwen/DashScope 或用户自有 OpenAI-compatible 网关，不推荐 GPT 作为默认模型。`OPENAI_*` 环境变量只是兼容协议命名。
+## 项目概述
 
-## 当前能力
+Lingshu Agent 是一个本地可运行的自定义智能体平台，提供完整的闭环能力，包括：
+- **聊天页面**（GPT 风格主聊天页）
+- **智能体配置页**（Coze 风格）
+- **用户私有模型配置**
+- **知识库 RAG**
+- **工具集成**
+- **发布审核、内部市场复制**
+- **会话恢复、头像和个人资料**
 
-- 账号：本地注册/登录、JWT、个人资料、头像、退出登录。
-- 角色：只保留 `admin` 和 `user`。管理员可审核智能体、查看成员只读列表；不做邀请用户 UI。
-- 模型：用户在“我的模型”里配置 `base_url`、`api_key`、模型名、深度思考能力和常用参数；API key 不回显。系统模型仅作为预设/兜底。
-- 智能体：创建、编辑、删除、草稿调试、发布；普通用户发布后需要管理员审核，通过后进入市场，其他用户可复制使用。
-- 聊天：只允许选择已审核发布的智能体；用户消息和 assistant 消息左右分侧；assistant 支持 Markdown、表格和代码块复制；支持按模型能力开启单轮“深度思考”。
-- 多模态与附件：聊天可上传、粘贴图片，也可上传 TXT/MD/CSV/PDF/DOCX 文档。图片不会被 `supports_image` 预判拦截，会直接随聊天请求交给所选模型；如果上游模型或网关不支持图片，真实返回会显示在聊天里。文档会解析成本轮上下文，不自动入知识库。
-- RAG：智能体默认 RAG 开关 + 聊天单轮 RAG pill 开关；支持 `rag_options` 覆盖。
-- 检索链路：parent-child chunk、dense retrieval、中文 BM25、RRF、可选 `qwen3-rerank`、Redis 查询缓存、结构化引用和证据不足拒答。
-- 知识库：创建、文本/文件入库、同步索引、文档列表、删除文档；删除会清理 PostgreSQL chunk 和向量数据。
-- 工具：内置工具和用户 HTTP 工具 CRUD、测试、绑定与运行记录。
-- 记忆：session summary 记忆；进入发布快照并影响草稿/已发布聊天。
-- 评测：提供 `eval/rag_cases.jsonl` 和 `eval/run_rag_eval.py --mock`。
+项目旨在帮助开发者快速搭建具备多模态、检索增强（RAG）以及可自定义模型的对话系统。
 
-不做：工作流画布、OAuth、计费、公开 API/embed、复杂 RBAC、公开 SaaS 市场、多租户运营后台、邀请用户页面、邀请列表页面。
+---
 
-## 固定端口
+## 核心功能
 
-本地端口不可变：
+- **账号体系**：本地注册/登录、JWT 鉴权、个人资料管理、头像上传、注销。
+- **角色管理**：`admin` 与 `user` 两种角色，管理员可审核智能体并查看成员只读列表。
+- **模型配置**：在 “我的模型” 页面配置 `base_url`、`api_key`、模型名称、深度思考能力及常用参数。系统模型仅作预设/兜底。
+- **智能体管理**：创建、编辑、删除、草稿调试、发布；普通用户发布后需管理员审核，审核通过后进入内部市场，其他用户可复制使用。
+- **聊天交互**：仅可选择已审核发布的智能体；聊天支持 Markdown、表格、代码块复制；可按模型能力开启单轮 “深度思考”。
+- **多模态与附件**：支持图片上传、粘贴以及 TXT/MD/CSV/PDF/DOCX 文档。图片直接随聊天请求发送至模型；文档解析为本轮上下文，不自动入库。
+- **RAG 与检索**：默认开启 RAG 开关，支持单轮 RAG pill，提供 `rag_options` 覆盖。检索链路包括 parent‑child chunk、dense retrieval、中文 BM25、RRF、可选 `qwen3‑rerank`、Redis 缓存、结构化引用与证据不足拒答。
+- **知识库**：创建、文本/文件入库、同步索引、文档列表、删除文档（会清理 PostgreSQL chunk 与向量数据）。
+- **工具集成**：内置工具和用户自定义 HTTP 工具的 CRUD、测试、绑定与运行记录。
+- **会话记忆**：Session summary 记忆；发布快照影响草稿/已发布聊天。
+- **评测**：提供 `eval/rag_cases.jsonl` 与运行脚本 `python eval/run_rag_eval.py --mock` 用于 RAG 评估。
 
-- Backend: `http://127.0.0.1:8000`
-- Frontend: `http://127.0.0.1:5174`
+---
 
-如果端口被占用，停止旧进程后仍使用同一端口，不切换到其他端口。
+## 技术栈与框架
 
-```powershell
-Get-NetTCPConnection -LocalPort 8000,5174 -State Listen -ErrorAction SilentlyContinue |
-  Select-Object LocalAddress,LocalPort,OwningProcess
-```
+- **后端**：FastAPI（Python 3.11），使用 Uvicorn 作为 ASGI 服务器。
+- **前端**：Vite + Vue 3（或 React，项目中实际使用 Vue），采用 TypeScript 与 Tailwind CSS（已固定 `127.0.0.1:5174 --strictPort`）。
+- **数据库**：PostgreSQL（通过 SQLAlchemy ORM 访问），默认连接字符串在 `.env` 中配置。
+- **向量检索**：默认使用内存实现（`LINGSHU_VECTOR_BACKEND=memory`），可切换为 Milvus（`MILVUS_COLLECTION`、`MILVUS_DIMENSION` 配置）。
+- **RAG 模型**：支持 Qwen、DashScope 兼容 OpenAI 接口，环境变量 `OPENAI_API_BASE`、`OPENAI_MODEL`、`OPENAI_EMBEDDING_MODEL` 配置。
+- **容器化**：提供 `Dockerfile.api` 与 `docker-compose.yml`，便于一键部署。
+- **测试**：使用 PyTest，覆盖单元测试与集成测试。
 
-## 快速启动
+---
 
-```powershell
-Copy-Item .env.example .env
-pip install -r requirements.txt
-uvicorn api.main:app --host 127.0.0.1 --port 8000
-```
-
-前端：
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-Vite 已固定 `127.0.0.1:5174 --strictPort`。
-
-## 关键配置
+## 环境变量与关键配置
 
 ```env
+# 安全密钥（请自行替换为长随机字符串）
 JWT_SECRET=replace-with-a-long-random-secret
+
+# API Key 加密密钥（可选）
 API_KEY_ENCRYPTION_KEY=
+
+# 是否启用邀请 API
 INVITE_API_ENABLED=false
+
+# 数据库连接（请根据实际部署修改）
 DATABASE_URL=postgresql+psycopg2://lingshu:lingshu@192.168.150.101:5433/lingshu_agent
+
+# OpenAI 兼容网关（默认使用阿里云 DashScope）
 OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 DASHSCOPE_API_KEY=
 OPENAI_MODEL=qwen-plus
 OPENAI_EMBEDDING_MODEL=text-embedding-v4
+
+# 向量后端配置（memory 或 Milvus）
 LINGSHU_VECTOR_BACKEND=memory
 MILVUS_COLLECTION=lingshu_chunks
 MILVUS_DIMENSION=
+
+# RAG 参数
 RAG_TOP_K=4
 RAG_DENSE_TOP_K=12
 RAG_BM25_TOP_K=12
@@ -74,50 +79,91 @@ RAG_RRF_K=60
 RAG_RERANK_ENABLED=true
 RAG_RERANK_MODEL=qwen3-rerank
 RAG_CACHE_TTL_SECONDS=3600
+
+# 上传文件大小上限（8 MB）
 UPLOAD_MAX_BYTES=8388608
 ```
 
-真实聊天模型优先在前端“我的模型”中由用户自己配置；环境变量是后端 embedding、rerank 和开发兜底配置。
+**端口约束**（不可变）
+- Backend: `http://127.0.0.1:8000`
+- Frontend: `http://127.0.0.1:5174`
 
-## 常用命令
+如果端口被占用，请先停止旧进程后仍使用同一端口，不会自动切换。
 
 ```powershell
-python -m pytest -q
-python eval/run_rag_eval.py --cases eval/rag_cases.jsonl --mock
-python scripts/check_markdown_links.py
-python scripts/check_text_encoding.py README.md docs CHANGELOG.md CONTRIBUTING.md
-python scripts/release_check.py --with-frontend
+Get-NetTCPConnection -LocalPort 8000,5174 -State Listen -ErrorAction SilentlyContinue |
+  Select-Object LocalAddress,LocalPort,OwningProcess
 ```
 
-前端构建：
+---
+
+## 快速启动
+
+```powershell
+# 复制环境变量示例并自行填写
+Copy-Item .env.example .env
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动后端 API（默认 8000 端口）
+uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+前端开发（确保已安装 Node.js）
 
 ```powershell
 cd frontend
-npm run build
+npm install
+npm run dev   # 访问 http://127.0.0.1:5174
 ```
 
-## 主要 API
+---
 
-- Auth: `POST /api/auth/register`, `POST /api/auth/login`, `GET/PATCH /api/auth/me`
-- Members: `GET /api/workspaces/members`，只读成员列表
-- User models: `GET/POST/PATCH/DELETE /api/user-models`, `POST /api/user-models/{id}/test`。测试入口在“我的模型”的编辑弹窗里，图片探测只作诊断，不决定聊天能否发送图片。
-- System models: `GET /api/models`, `POST/PATCH/DELETE /api/admin/models`
-- Agents: `GET/POST /api/agents`, `GET/PATCH/DELETE /api/agents/{id}`, `POST /api/agents/{id}/publish`
-- Review/market: `GET /api/admin/agent-reviews`, `POST /api/admin/agent-reviews/{id}/approve`, `GET /api/market/agents`, `POST /api/market/agents/{id}/copy`
-- Knowledge: `GET/POST /api/knowledge-bases`, `POST /api/knowledge-bases/{id}/documents`, `POST /api/knowledge-bases/{id}/index`, `GET /api/knowledge/jobs/{job_id}`
-- Chat: `POST /api/agents/{id}/chat/stream`
-- Sessions/runs/feedback: `GET /api/sessions/{id}`, `GET /api/runs/{id}`, `POST /api/messages/{id}/feedback`
+## 主要 API 列表
 
-## 文档
+- **Auth**: `POST /api/auth/register`, `POST /api/auth/login`, `GET/PATCH /api/auth/me`
+- **Members**: `GET /api/workspaces/members`（只读成员列表）
+- **User Models**: `GET/POST/PATCH/DELETE /api/user-models`, `POST /api/user-models/{id}/test`
+- **System Models**: `GET /api/models`, `POST/PATCH/DELETE /api/admin/models`
+- **Agents**: `GET/POST /api/agents`, `GET/PATCH/DELETE /api/agents/{id}`, `POST /api/agents/{id}/publish`
+- **Review/Market**: `GET /api/admin/agent-reviews`, `POST /api/admin/agent-reviews/{id}/approve`, `GET /api/market/agents`, `POST /api/market/agents/{id}/copy`
+- **Knowledge**: `GET/POST /api/knowledge-bases`, `POST /api/knowledge-bases/{id}/documents`, `POST /api/knowledge-bases/{id}/index`, `GET /api/knowledge/jobs/{job_id}`
+- **Chat**: `POST /api/agents/{id}/chat/stream`
+- **Sessions/Runs/Feedback**: `GET /api/sessions/{id}`, `GET /api/runs/{id}`, `POST /api/messages/{id}/feedback`
 
-- [快速启动](docs/quickstart.md)
-- [产品需求](docs/product-requirements.md)
-- [架构说明](docs/architecture.md)
-- [API 设计](docs/api-design.md)
-- [存储设计](docs/storage-design.md)
-- [RAG 设计](docs/rag-design.md)
-- [评测设计](docs/evaluation.md)
-- [部署说明](docs/deployment.md)
-- [故障排查](docs/troubleshooting.md)
-- [贡献指南](CONTRIBUTING.md)
-- [变更记录](CHANGELOG.md)
+---
+
+## 文档与帮助
+
+- **快速入门**：`docs/quickstart.md`
+- **产品需求**：`docs/product-requirements.md`
+- **架构说明**：`docs/architecture.md`
+- **API 设计**：`docs/api-design.md`
+- **存储设计**：`docs/storage-design.md`
+- **RAG 设计**：`docs/rag-design.md`
+- **部署说明**：`docs/deployment.md`
+- **故障排查**：`docs/troubleshooting.md`
+- **贡献指南**：`CONTRIBUTING.md`
+- **变更记录**：`CHANGELOG.md`
+
+---
+
+## 贡献指南
+
+欢迎提交 Pull Request！在提交前请运行以下检查脚本确保代码质量：
+
+```powershell
+python -m pytest -q
+python scripts/check_markdown_links.py
+python scripts/check_text_encoding.py README.md docs/**/*.md
+python scripts/release_check.py --with-frontend
+```
+
+---
+
+## 许可证
+
+本项目遵循 MIT 许可证，详细内容请参见 `LICENSE` 文件。
+
+---

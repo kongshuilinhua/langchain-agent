@@ -1,0 +1,534 @@
+<h2>智能体配置面板改版 - 详细交互方案 (Redesign Interaction Details)</h2>
+<p class="subtitle">已根据您的反馈将“+”改为了更加直观的“添加”按钮。下方是真实的交互模型，您可以点击进行操作预览：</p>
+
+<!-- Interactive CSS and mockup -->
+<style>
+  .coze-panel {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    max-width: 450px;
+    margin: 0 auto 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #1e293b;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+    overflow: hidden;
+  }
+  
+  .coze-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #94a3b8;
+    padding: 14px 16px 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: #fafafa;
+  }
+  
+  .coze-item {
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .coze-item:last-child {
+    border-bottom: none;
+  }
+  
+  .coze-header {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    background: #ffffff;
+    transition: background 0.2s;
+    user-select: none;
+  }
+  .coze-header:hover {
+    background: #f8fafc;
+  }
+  
+  .coze-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  
+  .coze-caret {
+    font-size: 9px;
+    color: #64748b;
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+  .expanded .coze-caret {
+    transform: rotate(90deg);
+  }
+  
+  .coze-count {
+    color: #6366f1;
+    font-weight: normal;
+    font-size: 11px;
+    margin-left: 2px;
+  }
+  
+  /* Redesigned Add Button */
+  .coze-add-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #4f46e5;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: #f0f0ff;
+    border: 1px solid #e0e0fe;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .coze-add-btn:hover {
+    background: #e0e7ff;
+    color: #3b82f6;
+    border-color: #bfdbfe;
+  }
+  
+  .coze-body {
+    display: none;
+    padding: 12px 16px;
+    background: #ffffff;
+    border-top: 1px solid #f1f5f9;
+  }
+  .expanded .coze-body {
+    display: block;
+  }
+  
+  /* Bound Card styling */
+  .bound-card {
+    border: 1px solid #e2e8f0;
+    background: #fafafa;
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: all 0.2s;
+    margin-bottom: 8px;
+  }
+  .bound-card:last-child {
+    margin-bottom: 0;
+  }
+  .bound-card:hover {
+    border-color: #6366f1;
+    background: #fbfbfe;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.05);
+  }
+  
+  .bound-card-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .bound-card-icon {
+    font-size: 16px;
+    width: 28px;
+    height: 28px;
+    background: #e0e7ff;
+    color: #4f46e5;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .kb-icon {
+    background: #f0fdf4;
+    color: #16a34a;
+  }
+  
+  .bound-card-title {
+    font-weight: 600;
+    font-size: 12.5px;
+    color: #1e293b;
+  }
+  .bound-card-meta {
+    font-size: 10.5px;
+    color: #64748b;
+    margin-top: 2px;
+  }
+  
+  .bound-card-remove {
+    color: #94a3b8;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  .bound-card-remove:hover {
+    color: #ef4444;
+    background: #fee2e2;
+  }
+  
+  /* Modal Overlay Mockup */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(15, 23, 42, 0.4);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-container {
+    background: #ffffff;
+    border-radius: 16px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 85vh;
+    box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #f1f5f9;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-header h3 {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0;
+  }
+  .modal-close {
+    font-size: 18px;
+    color: #64748b;
+    cursor: pointer;
+    border: none;
+    background: none;
+  }
+  .modal-close:hover {
+    color: #1e293b;
+  }
+  .modal-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  
+  .search-wrapper {
+    margin-bottom: 16px;
+    position: relative;
+  }
+  .search-wrapper input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .search-wrapper input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  }
+  
+  .modal-item-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .modal-item-row {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: all 0.2s;
+  }
+  .modal-item-row:hover {
+    border-color: #cbd5e1;
+    background: #fafafa;
+  }
+  
+  .modal-item-btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid #4f46e5;
+    background: #4f46e5;
+    color: #fff;
+    transition: all 0.2s;
+  }
+  .modal-item-btn:hover {
+    background: #4338ca;
+  }
+  .modal-item-btn.added {
+    background: #f1f5f9;
+    color: #94a3b8;
+    border-color: #e2e8f0;
+    cursor: default;
+  }
+</style>
+
+<div class="options" data-multiselect style="display:none;">
+  <!-- Added for framework option tracking, hidden but interactive -->
+  <div class="option selected" data-choice="tab_modals" onclick="toggleSelect(this)"></div>
+</div>
+
+<!-- Interactive Coze panel Mockup -->
+<div class="coze-panel">
+  <!-- SKILLS CATEGORY -->
+  <div class="coze-section-title">技能</div>
+  
+  <!-- Tools Accordion -->
+  <div class="coze-item expanded" id="sec-tools">
+    <div class="coze-header" onclick="toggleSection('sec-tools')">
+      <div class="coze-header-left">
+        <span class="coze-caret">▶</span>
+        <span>工具<span class="coze-count">(2)</span></span>
+      </div>
+      <!-- ADD BUTTON (User Feedback incorporated) -->
+      <div class="coze-add-btn" onclick="openModal('tools-modal', event)">
+        <span style="font-weight:bold;">+</span> 添加
+      </div>
+    </div>
+    <div class="coze-body">
+      <!-- Bound Tools cards -->
+      <div class="bound-card">
+        <div class="bound-card-info">
+          <span class="bound-card-icon">🧮</span>
+          <div>
+            <div class="bound-card-title">calculator</div>
+            <div class="bound-card-meta">计算数学表达式，支持常用函数</div>
+          </div>
+        </div>
+        <div class="bound-card-remove" onclick="removeCard(this, 'tools')">✕</div>
+      </div>
+      <div class="bound-card">
+        <div class="bound-card-info">
+          <span class="bound-card-icon">🔍</span>
+          <div>
+            <div class="bound-card-title">Web Search</div>
+            <div class="bound-card-meta">内置的 Web 网页搜索适配器</div>
+          </div>
+        </div>
+        <div class="bound-card-remove" onclick="removeCard(this, 'tools')">✕</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- KNOWLEDGE CATEGORY -->
+  <div class="coze-section-title">知识</div>
+  
+  <!-- Knowledge Accordion -->
+  <div class="coze-item expanded" id="sec-kb">
+    <div class="coze-header" onclick="toggleSection('sec-kb')">
+      <div class="coze-header-left">
+        <span class="coze-caret">▶</span>
+        <span>文本<span class="coze-count">(1)</span></span>
+      </div>
+      <div class="coze-add-btn" onclick="openModal('kb-modal', event)">
+        <span style="font-weight:bold;">+</span> 添加
+      </div>
+    </div>
+    <div class="coze-body">
+      <!-- Bound Knowledge Base card -->
+      <div class="bound-card">
+        <div class="bound-card-info">
+          <span class="bound-card-icon kb-icon">📄</span>
+          <div>
+            <div class="bound-card-title">产品开发指南</div>
+            <div class="bound-card-meta">92.31 KB · 25 个切片</div>
+          </div>
+        </div>
+        <div class="bound-card-remove" onclick="removeCard(this, 'kb')">✕</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- MEMORY CATEGORY -->
+  <div class="coze-section-title">记忆</div>
+  <!-- Memory Accordion -->
+  <div class="coze-item" id="sec-memory">
+    <div class="coze-header" onclick="toggleSection('sec-memory')">
+      <div class="coze-header-left">
+        <span class="coze-caret">▶</span>
+        <span>会话记忆</span>
+      </div>
+    </div>
+    <div class="coze-body" style="font-size: 12px; color: #64748b;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+        <span>开启会话摘要记忆</span>
+        <span style="color:#10b981; font-weight:bold;">已开启</span>
+      </div>
+      <div>记忆消息上限：12 条</div>
+    </div>
+  </div>
+</div>
+
+<!-- TOOLS MODAL POPUP -->
+<div class="modal-overlay" id="tools-modal" onclick="closeModal('tools-modal')">
+  <div class="modal-container" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3>选择工具 (Select Tool)</h3>
+      <button class="modal-close" onclick="closeModal('tools-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="search-wrapper">
+        <input type="text" placeholder="搜索工具名称或描述..." />
+      </div>
+      <div class="modal-item-list">
+        <div class="modal-item-row">
+          <div>
+            <strong style="font-size: 13px;">current_time</strong>
+            <div style="font-size: 11px; color:#64748b; margin-top:2px;">获取当前日期和时间，可指定时区。</div>
+          </div>
+          <button class="modal-item-btn" onclick="addTool('current_time', '时间获取', '获取当前系统时间', '🕒')">添加</button>
+        </div>
+        <div class="modal-item-row">
+          <div>
+            <strong style="font-size: 13px;">Weather lookup</strong>
+            <div style="font-size: 11px; color:#64748b; margin-top:2px;">根据城市名查询实时天气，不需要 API Key。</div>
+          </div>
+          <button class="modal-item-btn" onclick="addTool('weather', 'Weather lookup', '查询实时天气', '🌤️')">添加</button>
+        </div>
+        <div class="modal-item-row">
+          <div>
+            <strong style="font-size: 13px;">calculator</strong>
+            <div style="font-size: 11px; color:#64748b; margin-top:2px;">计算数学表达式。支持常用函数。</div>
+          </div>
+          <button class="modal-item-btn added" disabled>已添加</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- KNOWLEDGE MODAL POPUP -->
+<div class="modal-overlay" id="kb-modal" onclick="closeModal('kb-modal')">
+  <div class="modal-container" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3>选择知识库 (Select Knowledge Base)</h3>
+      <button class="modal-close" onclick="closeModal('kb-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+        <div class="search-wrapper" style="flex:1; margin-bottom:0; margin-right:10px;">
+          <input type="text" placeholder="搜索知识库名称..." />
+        </div>
+        <button class="modal-item-btn" style="background:#10b981; border-color:#10b981;">+ 新建知识库</button>
+      </div>
+      <div class="modal-item-list">
+        <div class="modal-item-row">
+          <div>
+            <strong style="font-size: 13px;">新手指南知识库</strong>
+            <div style="font-size: 11px; color:#64748b; margin-top:2px;">12.4 KB · 3 个切片</div>
+          </div>
+          <button class="modal-item-btn" onclick="addKb('新手指南知识库', '12.4 KB · 3 个切片')">添加</button>
+        </div>
+        <div class="modal-item-row">
+          <div>
+            <strong style="font-size: 13px;">行业术语词表</strong>
+            <div style="font-size: 11px; color:#64748b; margin-top:2px;">54.0 KB · 15 个切片</div>
+          </div>
+          <button class="modal-item-btn" onclick="addKb('行业术语词表', '54.0 KB · 15 个切片')">添加</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Accordion Toggle
+  function toggleSection(id) {
+    const el = document.getElementById(id);
+    el.classList.toggle('expanded');
+  }
+
+  // Modals Actions
+  function openModal(modalId, event) {
+    event.stopPropagation(); // Avoid triggering accordion toggle
+    document.getElementById(modalId).style.display = 'flex';
+  }
+  function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+  }
+
+  // Bound cards removal simulation
+  function removeCard(btn, type) {
+    event.stopPropagation();
+    const card = btn.closest('.bound-card');
+    const parent = card.parentNode;
+    card.remove();
+    
+    // Update count
+    const section = parent.closest('.coze-item');
+    const countSpan = section.querySelector('.coze-count');
+    const remaining = parent.querySelectorAll('.bound-card').length;
+    countSpan.textContent = '(' + remaining + ')';
+  }
+
+  // Bound cards addition simulation
+  function addTool(id, name, desc, icon) {
+    const sectionBody = document.querySelector('#sec-tools .coze-body');
+    const newCard = document.createElement('div');
+    newCard.className = 'bound-card';
+    newCard.innerHTML = `
+      <div class="bound-card-info">
+        <span class="bound-card-icon">${icon}</span>
+        <div>
+          <div class="bound-card-title">${name}</div>
+          <div class="bound-card-meta">${desc}</div>
+        </div>
+      </div>
+      <div class="bound-card-remove" onclick="removeCard(this, 'tools')">✕</div>
+    `;
+    sectionBody.appendChild(newCard);
+    
+    // Close modal and update count
+    closeModal('tools-modal');
+    const remaining = sectionBody.querySelectorAll('.bound-card').length;
+    document.querySelector('#sec-tools .coze-count').textContent = '(' + remaining + ')';
+  }
+
+  function addKb(name, meta) {
+    const sectionBody = document.querySelector('#sec-kb .coze-body');
+    const newCard = document.createElement('div');
+    newCard.className = 'bound-card';
+    newCard.innerHTML = `
+      <div class="bound-card-info">
+        <span class="bound-card-icon kb-icon">📄</span>
+        <div>
+          <div class="bound-card-title">${name}</div>
+          <div class="bound-card-meta">${meta}</div>
+        </div>
+      </div>
+      <div class="bound-card-remove" onclick="removeCard(this, 'kb')">✕</div>
+    `;
+    sectionBody.appendChild(newCard);
+    
+    // Close modal and update count
+    closeModal('kb-modal');
+    const remaining = sectionBody.querySelectorAll('.bound-card').length;
+    document.querySelector('#sec-kb .coze-count').textContent = '(' + remaining + ')';
+  }
+</script>
+
+<div class="section" style="margin-top: 2rem;">
+  <h3>❓ 澄清问题与实现细节沟通 (Clarification & Technical Design)</h3>
+  <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:16px; font-size: 13px; line-height: 1.6;">
+    <p>为了让接下来的代码实现符合您的最佳期望，我有一个核心的设计选项想请您做出抉择：</p>
+    <br>
+    <strong>关于“选择工具”和“选择知识库”的弹窗整合方式：</strong>
+    <ul style="margin-left: 20px; margin-top: 6px;">
+      <li><strong>选项 1 (分离式轻量浮窗)</strong>：点击“工具”的添加按钮就弹出纯粹的“选择工具”浮窗，点击“知识库”的添加按钮就弹出纯粹的“选择知识库”浮窗。它们彼此独立，加载速度快，交互最专注。</li>
+      <li><strong>选项 2 (多标签一体化选择器)</strong>：仿照 Coze 资源库的设计，无论点击哪里的添加，均弹出一个统一的“智能体资源库”对话框，左边/上边可以通过 Tab 切换“工具/插件”和“知识库”。这显得更加高大上，代码逻辑更聚合。</li>
+    </ul>
+  </div>
+</div>

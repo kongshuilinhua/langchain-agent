@@ -2521,28 +2521,24 @@ function KnowledgeWorkspace({
   const [addDropdownOpen, setAddDropdownOpen] = useState(false);
   const [customInputOpen, setCustomInputOpen] = useState(false);
 
-  const [isEditingKb, setIsEditingKb] = useState(false);
-  const [editKbName, setEditKbName] = useState(kb?.name || '');
-  const [editKbDesc, setEditKbDesc] = useState(kb?.description || '');
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editForm, setEditForm] = useState({ name: '', description: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
 
-  useEffect(() => {
-    if (kb) {
-      setEditKbName(kb.name || '');
-      setEditKbDesc(kb.description || '');
-    }
-  }, [kb]);
-
-  async function handleSaveKbInfo(e) {
+  async function handleEditSubmit(e) {
     if (e) e.preventDefault();
-    if (!editKbName.trim()) return;
+    if (!editForm.name.trim()) return;
+    setSavingEdit(true);
     try {
       await updateKnowledgeBase(kb.id, {
-        name: editKbName.trim(),
-        description: editKbDesc.trim()
+        name: editForm.name.trim(),
+        description: editForm.description.trim()
       });
-      setIsEditingKb(false);
+      setEditDialogOpen(false);
     } catch (err) {
       console.error(err);
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -2649,119 +2645,44 @@ function KnowledgeWorkspace({
         <button className="btn-back" type="button" onClick={handleBack}>
           <ChevronLeft size={16} />返回列表
         </button>
-        {isEditingKb ? (
-          <form className="workspace-kb-edit-form" onSubmit={handleSaveKbInfo} style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '240px' }}>
-            <input
-              type="text"
-              value={editKbName}
-              onChange={(e) => setEditKbName(e.target.value)}
-              placeholder="知识库名称"
-              maxLength={100}
-              required
-              style={{
-                padding: '4px 8px',
-                fontSize: '14px',
-                fontWeight: 'bold',
-                borderRadius: '4px',
-                border: '1px solid #dfe4ef',
-                background: '#ffffff',
-                color: '#111827',
-                width: '240px'
-              }}
-            />
-            <input
-              type="text"
-              value={editKbDesc}
-              onChange={(e) => setEditKbDesc(e.target.value)}
-              placeholder="知识库描述"
-              maxLength={200}
-              style={{
-                padding: '4px 8px',
-                fontSize: '12px',
-                borderRadius: '4px',
-                border: '1px solid #dfe4ef',
-                background: '#ffffff',
-                color: '#667085',
-                width: '240px'
-              }}
-            />
-            <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
-              <button 
-                type="submit" 
-                className="primary small" 
-                style={{ 
-                  fontSize: '11px', 
-                  padding: '2px 8px', 
-                  borderRadius: '4px', 
-                  background: '#4d43e6', 
-                  color: '#ffffff',
+        <div className="workspace-kb-title-block" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#111827' }}>{kb?.name}</h3>
+              <button
+                type="button"
+                className="coze-icon-button"
+                title="编辑名称和描述"
+                style={{
+                  background: 'none',
                   border: 'none',
+                  padding: '2px',
                   cursor: 'pointer',
-                  fontWeight: 600
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: '#667085',
+                  borderRadius: '4px',
+                  transition: 'all 0.2s'
+                }}
+                onClick={() => {
+                  setEditForm({ name: kb?.name || '', description: kb?.description || '' });
+                  setEditDialogOpen(true);
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#4d43e6';
+                  e.currentTarget.style.background = '#f4f4f5';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = '#667085';
+                  e.currentTarget.style.background = 'none';
                 }}
               >
-                保存
-              </button>
-              <button 
-                type="button" 
-                className="secondary small" 
-                style={{ 
-                  fontSize: '11px', 
-                  padding: '2px 8px', 
-                  borderRadius: '4px', 
-                  background: '#ffffff', 
-                  color: '#667085',
-                  border: '1px solid #dfe4ef',
-                  cursor: 'pointer',
-                  fontWeight: 600
-                }} 
-                onClick={() => setIsEditingKb(false)}
-              >
-                取消
+                <SquarePen size={14} />
               </button>
             </div>
-          </form>
-        ) : (
-          <div className="workspace-kb-title-block" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#111827' }}>{kb?.name}</h3>
-                <button
-                  type="button"
-                  className="coze-icon-button"
-                  title="编辑名称和描述"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: '2px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    color: '#667085',
-                    borderRadius: '4px',
-                    transition: 'all 0.2s'
-                  }}
-                  onClick={() => {
-                    setEditKbName(kb?.name || '');
-                    setEditKbDesc(kb?.description || '');
-                    setIsEditingKb(true);
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = '#4d43e6';
-                    e.currentTarget.style.background = '#f4f4f5';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = '#667085';
-                    e.currentTarget.style.background = 'none';
-                  }}
-                >
-                  <SquarePen size={14} />
-                </button>
-              </div>
-              <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#667085' }}>{kb?.description || '暂无描述'}</p>
-            </div>
+            <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#667085' }}>{kb?.description || '暂无描述'}</p>
           </div>
-        )}
+        </div>
         <div className="workspace-header-actions">
           <button
             className="primary"
@@ -2993,6 +2914,21 @@ function KnowledgeWorkspace({
             </form>
           </section>
         </div>
+      )}
+
+      {editDialogOpen && (
+        <KnowledgeBaseDialog
+          title="编辑知识库"
+          description="修改知识库的名称和描述，方便在智能体配置中进行管理与调用。"
+          submitText="保存修改"
+          savingText="保存中..."
+          isEdit={true}
+          form={editForm}
+          onChange={setEditForm}
+          onCancel={() => setEditDialogOpen(false)}
+          onSubmit={handleEditSubmit}
+          saving={savingEdit}
+        />
       )}
     </div>
   );
