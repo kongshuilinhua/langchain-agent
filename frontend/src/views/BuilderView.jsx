@@ -425,7 +425,6 @@ export function BuilderView(props) {
           </Panel>
 
           <Panel title="记忆" icon={<KeyRound size={16} />}>
-            <ConfigRow label="变量"><span className="muted">用于聊天时收集 city、device_model 等输入。</span></ConfigRow>
             <ConfigRow label="会话记忆">
               <Toggle
                 checked={!!agentForm.memory?.enabled}
@@ -433,30 +432,20 @@ export function BuilderView(props) {
                 onChange={(value) => setAgentForm({ ...agentForm, memory: { ...(agentForm.memory || {}), enabled: value, strategy: 'session_summary' } })}
               />
             </ConfigRow>
-            <input
-              type="number"
-              min="1"
-              max="100"
-              value={agentForm.memory?.max_messages ?? 12}
-              onChange={(e) => setAgentForm({ ...agentForm, memory: { ...(agentForm.memory || {}), max_messages: Number(e.target.value), strategy: 'session_summary' } })}
-              placeholder="记忆消息上限"
-            />
-            <div className="dynamic-list">
-              {(agentForm.variables || []).map((variable, index) => (
-                <div className="variable-row" key={index}>
-                  <input value={variable.key} onChange={(e) => updateVariable(index, { key: e.target.value })} placeholder="key" />
-                  <input value={variable.label} onChange={(e) => updateVariable(index, { label: e.target.value })} placeholder="展示名" />
-                  <select value={variable.type} onChange={(e) => updateVariable(index, { type: e.target.value })}>
-                    <option value="string">string</option>
-                    <option value="number">number</option>
-                    <option value="boolean">boolean</option>
-                  </select>
-                  <input value={String(variable.default_value ?? '')} onChange={(e) => updateVariable(index, { default_value: e.target.value })} placeholder="默认值" />
-                  <button type="button" onClick={() => removeVariable(index)}>删除</button>
-                </div>
-              ))}
-            </div>
-            <button type="button" onClick={addVariable}><Plus size={14} />新增变量</button>
+            {!!agentForm.memory?.enabled && (
+              <ConfigRow label="记忆消息上限">
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  className="small-input"
+                  style={{ width: '80px', padding: '6px', borderRadius: '8px', border: '1px solid #dfe4ef', background: '#fff', color: '#111827' }}
+                  value={agentForm.memory?.max_messages ?? 12}
+                  onChange={(e) => setAgentForm({ ...agentForm, memory: { ...(agentForm.memory || {}), max_messages: Number(e.target.value), strategy: 'session_summary' } })}
+                  placeholder="12"
+                />
+              </ConfigRow>
+            )}
           </Panel>
 
           <AgentMemoryProfilePanel
