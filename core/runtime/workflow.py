@@ -476,6 +476,10 @@ class WorkflowRunner:
         }
 
     def _runtime_agent(self, agent: Agent, mode: str, user_id: int):
+        # Auto-fallback to draft if published is requested but agent has never been published.
+        if mode == "published" and not agent.published_version_id:
+            mode = "draft"
+
         if mode not in {"draft", "published"}:
             raise ValueError("mode must be draft or published")
         if mode == "published":
