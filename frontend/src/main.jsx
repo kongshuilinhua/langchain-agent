@@ -3330,6 +3330,10 @@ function formFromTool(tool, overrides = {}) {
   };
 }
 
+function isUserTool(tool) {
+  return Boolean(tool?.created_by);
+}
+
 // Dual-way parameter translator: Array <=> JSON Schema string
 function paramsToSchema(paramsArray) {
   const schema = {};
