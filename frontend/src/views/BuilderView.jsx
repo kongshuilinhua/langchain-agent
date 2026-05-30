@@ -723,7 +723,20 @@ function ModelConfigPanel({ agentForm, models, openMyModels, setAgentForm, setRa
         <button type="button" onClick={openMyModels}>我的模型</button>
       </div>
       <ConfigRow label="温度">
-        <input type="number" step="0.1" value={agentForm.temperature} onChange={(e) => setAgentForm({ ...agentForm, temperature: Number(e.target.value) })} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%' }}>
+          <input
+            type="range"
+            min="0"
+            max="2"
+            step="0.1"
+            style={{ flex: 1, accentColor: '#4d43e6', height: '6px', background: '#dfe4ef', borderRadius: '4px', cursor: 'pointer' }}
+            value={agentForm.temperature ?? 0.7}
+            onChange={(e) => setAgentForm({ ...agentForm, temperature: Number(e.target.value) })}
+          />
+          <span style={{ minWidth: '32px', fontWeight: 'bold', color: '#4d43e6', fontSize: '14px', textAlign: 'right' }}>
+            {Number(agentForm.temperature ?? 0.7).toFixed(1)}
+          </span>
+        </div>
       </ConfigRow>
       <ConfigRow label="默认启用 RAG">
         <Toggle

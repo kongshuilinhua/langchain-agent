@@ -2311,14 +2311,31 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 .library-tabs button.active,
 .media-tabs button.active { background: #f1f2ff; color: #4d43e6; }
 .template-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-direction: row;
+  overflow-x: auto;
   gap: 10px;
-  padding: 0 16px;
+  padding: 0 16px 8px;
+  scrollbar-width: thin;
+}
+.template-grid::-webkit-scrollbar {
+  height: 6px;
+}
+.template-grid::-webkit-scrollbar-track {
+  background: #f1f2f4;
+  border-radius: 4px;
+}
+.template-grid::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.template-grid::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 .prompt-template-card {
   position: relative;
   min-width: 0;
+  flex: 0 0 180px;
 }
 .prompt-template-card-main {
   width: 100%;
@@ -3721,7 +3738,6 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 
 @media (max-width: 1280px) {
   .workbench { grid-template-columns: 420px 430px 430px; }
-  .template-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 900px) {
@@ -3766,7 +3782,6 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 }
 
 @media (max-width: 680px) {
-  .template-grid { grid-template-columns: 1fr; }
   .variable-row { grid-template-columns: 1fr; }
   .two, .config-row, .session-tools { grid-template-columns: 1fr; }
   .messages { padding: 26px 16px; }
