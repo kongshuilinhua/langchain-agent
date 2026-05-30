@@ -253,6 +253,8 @@ def _source_payload(hit: dict) -> dict:
         "section": metadata.get("section") or "",
         "snippet": (hit.get("text") or "")[:360],
         "score": float(hit.get("score") or 0),
+        "dense_score": float(hit.get("dense_score") or 0),
+        "bm25_score": float(hit.get("bm25_score") or 0),
         "retrieval_channel": hit.get("retrieval_channel") or "dense",
     }
 
@@ -320,7 +322,27 @@ def _has_evidence(sources: list[dict], query: str) -> bool:
     if not tokens:
         return True
     snippets = " ".join(source.get("snippet", "") for source in sources).lower()
-    return any(token.lower() in snippets for token in tokens) or any(float(source.get("score") or 0) > 0 for source in sources)
+    
+    # 1. 关键字匹配：如果查询的分词与返回的文章片段有交集
+    if any(token.lower() in snippets for token in tokens):
+        return True
+        
+    # 2. 检索得分质量校验：
+    # 如果没有关键字直接重叠，我们需要检查密集检索（dense）或重排（rerank）的得分是否达到合理的相关度阈值，
+    # 从而避免非相关对话（如打招呼、问好）的纯随机向量邻居被当作“有证据”的知识返回。
+    for source in sources:
+        channel = source.get("retrieval_channel", "")
+        # 如果是 BM25 检索到了且得分大于 0，说明存在一定的词频重叠
+        if "bm25" in channel and source.get("bm25_score", 0.0) > 0:
+            return True
+        # 如果是 Dense 检索，其余相似度（通常为余弦相似度）必须在合理阈值（>= 0.40）之上才算作真实证据
+        if "dense" in channel and source.get("dense_score", 0.0) >= 0.40:
+            return True
+        # 如果是 Rerank 重排，重排得分通常在相似度范围内，也需要 >= 0.40 算作证据
+        if "rerank" in channel and (source.get("score", 0.0) >= 0.40 or source.get("dense_score", 0.0) >= 0.40):
+            return True
+            
+    return False
 
 
 def _cache_key(db: Session, *, workspace_id: int, knowledge_base_ids: list[int], query: str, config: dict) -> str:
