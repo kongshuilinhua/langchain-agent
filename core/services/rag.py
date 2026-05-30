@@ -315,16 +315,29 @@ def _bm25_scores(corpus: list[list[str]], query_tokens: list[str]) -> list[float
         return scores
 
 
+RAG_CONVERSATIONAL_STOPWORDS = {
+    "这个", "那个", "能够", "可以", "能够", "帮我", "做什么", "做点什么", 
+    "功能", "介绍", "自己", "是谁", "谁是", "你好", "您好", "怎么", "如何", 
+    "什么", "智能体", "机器人", "助手", "客服", "智能", "系统", "功能", 
+    "回答", "问题", "帮我", "谢谢", "再见", "请问", "关于", "内容", "我们",
+    "你们", "他们", "它们", "什么样", "哪些", "哪个", "帮助"
+}
+
+
 def _has_evidence(sources: list[dict], query: str) -> bool:
     if not sources:
         return False
-    tokens = [token for token in _tokenize(query) if len(token) > 1]
-    if not tokens:
-        return True
+        
+    # 过滤掉常见的辅助性/对话性停用词，避免其误匹配知识库中的通用词（例如“智能”、“系统”等）
+    tokens = [
+        token for token in _tokenize(query) 
+        if len(token) > 1 and token.lower() not in RAG_CONVERSATIONAL_STOPWORDS
+    ]
+    
     snippets = " ".join(source.get("snippet", "") for source in sources).lower()
     
-    # 1. 关键字匹配：如果查询的分词与返回的文章片段有交集
-    if any(token.lower() in snippets for token in tokens):
+    # 1. 关键字匹配：如果查询中过滤后的关键分词与返回的文章片段有交集
+    if tokens and any(token.lower() in snippets for token in tokens):
         return True
         
     # 2. 检索得分质量校验：
