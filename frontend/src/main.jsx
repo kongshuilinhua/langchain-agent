@@ -3172,7 +3172,7 @@ function ResegmentModal({
       const data = await api(`/api/knowledge-bases/${kbId}/documents/${doc.id}/preview`, {
         token,
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload,
       });
 
       setPreviewChunks(data.preview_items || []);
@@ -3202,7 +3202,7 @@ function ResegmentModal({
       await api(`/api/knowledge-bases/${kbId}/documents/${doc.id}/resegment`, {
         token,
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload,
       });
 
       notify?.('切片规则保存成功，已同步触发重新索引');
@@ -3379,7 +3379,11 @@ function ResegmentModal({
               disabled={previewing}
               onClick={handlePreview}
             >
-              {previewing ? '生成预览中...' : '🔍 预览层级分段'}
+              {previewing ? '生成预览中...' : (
+                chunkStrategy === 'hierarchy' ? '🔍 预览层级分段' :
+                chunkStrategy === 'custom' ? '🔍 预览自定义分段' :
+                '🔍 预览自动分段'
+              )}
             </button>
           </div>
 
