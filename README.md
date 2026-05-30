@@ -222,115 +222,90 @@ UPLOAD_MAX_BYTES=8388608          # 上传文件大小上限
 
 ## 快速启动
 
-### 1. 基础环境
+### 方式一：Docker Compose 一键部署（推荐）
+
+`docker-compose.yml` 定义了全部 5 个服务，一条命令全部启动：
 
 ```powershell
-# Python 3.11+（推荐 Conda）
+# 1. 配置 LLM API Key
+Copy-Item .env.example .env
+# 编辑 .env，至少填写 DASHSCOPE_API_KEY（或 OPENAI_API_KEY）
+
+# 2. 一键启动
+docker compose up -d
+```
+
+这会在 Docker 中启动：
+
+| 服务 | 镜像 | 端口 |
+|------|------|------|
+| PostgreSQL 16 | `postgres:16-alpine` | `5433:5432` |
+| Redis 7 | `redis:7-alpine` | `6380:6379` |
+| Milvus | `milvusdb/milvus:v2.5.4` | `19530:19530` |
+| API（FastAPI） | 从 `Dockerfile.api` 构建 | `8000:8000` |
+| 前端（Vue 3） | 从 `frontend/Dockerfile` 构建 | `5174:5174` |
+
+关键环境变量已在 `docker-compose.yml` 中配好：
+- `DATABASE_URL` 指向容器内的 `postgres:5432`
+- `REDIS_URL` 指向 `redis:6379`
+- `LINGSHU_VECTOR_BACKEND=milvus` + `MILVUS_URI=http://milvus:19530`
+- LLM 相关变量从 `.env` 传入（`OPENAI_API_KEY`、`OPENAI_MODEL` 等）
+
+```powershell
+# 常用命令
+docker compose ps          # 查看所有服务状态
+docker compose logs api    # 查看 API 日志
+docker compose down        # 停止并删除所有容器
+docker compose down -v     # 同时删除数据卷（PostgreSQL + Milvus 数据会丢失）
+```
+
+### 方式二：手动启动（前端/后端开发调试）
+
+适合需要热重载、频繁改代码的开发场景。
+
+**基础环境**
+
+```powershell
 conda create -n lingshu python=3.11 -y
 conda activate lingshu
-
-# Node.js（前端开发，推荐 18+）
-# 下载安装：https://nodejs.org/
-node --version   # 确认 >= 18
+node --version   # 确认 >= 18（https://nodejs.org/）
 ```
 
-### 2. PostgreSQL
+**基础设施（用 Docker 只跑数据库，API 和前端手动跑）**
 
 ```powershell
-# Windows：下载安装 https://www.postgresql.org/download/windows/
-# 安装时记住设置的 postgres 用户密码
-
-# 通过 psql 创建数据库和用户
-psql -U postgres
-```
-
-```sql
--- 在 psql 中执行
-CREATE USER lingshu WITH PASSWORD 'lingshu';
-CREATE DATABASE lingshu_agent OWNER lingshu;
-GRANT ALL PRIVILEGES ON DATABASE lingshu_agent TO lingshu;
-\q
-```
-
-```powershell
-# 验证连接
-psql -U lingshu -d lingshu_agent -h localhost -p 5432
-# 如果能连上说明 PostgreSQL 配置完成
-```
-
-如果 PostgreSQL 部署在其他机器（如 `192.168.150.101:5433`），修改 `.env` 中的 `DATABASE_URL` 即可，不需要本地安装。
-
-### 3. Milvus（向量数据库）
-
-开发阶段使用内存模式即可（`LINGSHU_VECTOR_BACKEND=memory`），无需安装 Milvus。生产环境再切换到 Milvus：
-
-```powershell
-# Docker 方式启动 Milvus Standalone（生产推荐）
-docker run -d --name milvus-standalone `
-  -p 19530:19530 -p 9091:9091 `
-  -e ETCD_USE_EMBED=true `
-  -e COMMON_STORAGETYPE=local `
-  milvusdb/milvus:latest
-
-# 确认 Milvus 运行正常
-curl http://localhost:19530/healthz
+# 只启动 postgres + redis + milvus，不启动 api 和 frontend
+docker compose up -d postgres redis milvus
 ```
 
 ```env
-# .env 中切换到 Milvus
+# .env 中的连接地址指向本地 Docker 端口
+DATABASE_URL=postgresql+psycopg2://lingshu:lingshu@localhost:5433/lingshu_agent
+REDIS_URL=redis://localhost:6380/0
 LINGSHU_VECTOR_BACKEND=milvus
 MILVUS_URI=http://localhost:19530
-MILVUS_COLLECTION=lingshu_chunks
 ```
 
-如果 Milvus 不可用，系统会自动降级到内存模式（`/api/health` 会报告 fallback 警告）。
+如果没有 Docker，也可以单独安装 PostgreSQL / Redis / Milvus，或者开发阶段用内存向量模式（`LINGSHU_VECTOR_BACKEND=memory`），不装 Milvus 和 Redis 也能跑。
 
-### 4. Redis（可选）
+**后端**
 
 ```powershell
-# Windows：下载 https://github.com/tporadowski/redis/releases
-# 或通过 WSL/Docker
-docker run -d --name redis -p 6379:6379 redis:7-alpine
-
-# 验证
-redis-cli ping   # 返回 PONG
-```
-
-```env
-# .env 中配置 Redis
-REDIS_URL=redis://localhost:6379/0
-```
-
-Redis 用于 RAG 缓存和索引作业状态。不配置也能正常运行，但 RAG 缓存不生效，`/api/knowledge/jobs/{id}` 查询作业状态会返回 unknown。
-
-### 5. 后端
-
-```powershell
-# 复制环境变量并填写
-Copy-Item .env.example .env
-
-# 编辑 .env，至少填写 DASHSCOPE_API_KEY 和 DATABASE_URL
-
-# 安装 Python 依赖
 pip install -r requirements.txt
-
-# 启动后端 API（端口 8000）
-uvicorn api.main:app --host 127.0.0.1 --port 8000
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 6. 前端
+**前端**
 
 ```powershell
 cd frontend
 npm install
-npm run dev   # 访问 http://127.0.0.1:5174
+npm run dev   # http://127.0.0.1:5174
 ```
 
-首次启动后端时会自动创建数据库表、默认工作空间、系统模型和内置工具。
+首次启动后端时会自动创建数据库表、默认工作空间和系统模型。
 
----
-
-## 端口约束
+### 端口约束
 
 | 服务 | 地址 | 说明 |
 |------|------|------|
