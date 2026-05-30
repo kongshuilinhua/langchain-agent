@@ -521,42 +521,69 @@ export function BuilderView(props) {
             </div>
           </div>
 
-          <Panel title="记忆" icon={<KeyRound size={16} />}>
-            <ConfigRow label="会话记忆">
-              <Toggle
-                checked={!!agentForm.memory?.enabled}
-                label={agentForm.memory?.enabled ? '开启' : '关闭'}
-                onChange={(value) => setAgentForm({ ...agentForm, memory: { ...(agentForm.memory || {}), enabled: value, strategy: 'session_summary' } })}
-              />
-            </ConfigRow>
-            {!!agentForm.memory?.enabled && (
-              <ConfigRow label="记忆消息上限">
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  className="small-input"
-                  style={{ width: '80px', padding: '6px', borderRadius: '8px', border: '1px solid #dfe4ef', background: '#fff', color: '#111827' }}
-                  value={agentForm.memory?.max_messages ?? 12}
-                  onChange={(e) => setAgentForm({ ...agentForm, memory: { ...(agentForm.memory || {}), max_messages: Number(e.target.value), strategy: 'session_summary' } })}
-                  placeholder="12"
+          {/* ==================== 记忆大类 ==================== */}
+          <div className="coze-group-title">记忆</div>
+          
+          {/* 会话记忆 */}
+          <div className={`coze-accordion-item ${expandedSections.memorySession ? 'expanded' : ''}`}>
+            <div className="coze-accordion-header" onClick={() => toggleSection('memorySession')}>
+              <div className="coze-header-left">
+                <ChevronRight size={14} className="coze-caret-icon" />
+                <span>会话记忆</span>
+              </div>
+            </div>
+            <div className="coze-accordion-body">
+              <ConfigRow label="会话记忆">
+                <Toggle
+                  checked={!!agentForm.memory?.enabled}
+                  label={agentForm.memory?.enabled ? '开启' : '关闭'}
+                  onChange={(value) => setAgentForm({ ...agentForm, memory: { ...(agentForm.memory || {}), enabled: value, strategy: 'session_summary' } })}
                 />
               </ConfigRow>
-            )}
-          </Panel>
+              {!!agentForm.memory?.enabled && (
+                <ConfigRow label="记忆消息上限">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%' }}>
+                    <input
+                      type="range"
+                      min="1"
+                      max="100"
+                      step="1"
+                      style={{ flex: 1, accentColor: '#4d43e6', height: '6px', background: '#dfe4ef', borderRadius: '4px', cursor: 'pointer' }}
+                      value={agentForm.memory?.max_messages ?? 12}
+                      onChange={(e) => setAgentForm({ ...agentForm, memory: { ...(agentForm.memory || {}), max_messages: Number(e.target.value), strategy: 'session_summary' } })}
+                    />
+                    <span style={{ minWidth: '24px', fontWeight: 'bold', color: '#4d43e6', fontSize: '13px', textAlign: 'right' }}>
+                      {agentForm.memory?.max_messages ?? 12}
+                    </span>
+                  </div>
+                </ConfigRow>
+              )}
+            </div>
+          </div>
 
-          <AgentMemoryProfilePanel
-            activeAgentId={activeAgentId}
-            canEditActive={canEditActive}
-            deleteMemoryProfile={deleteMemoryProfile}
-            memoryProfile={memoryProfile}
-            memoryProfileDraft={memoryProfileDraft}
-            memoryProfileError={memoryProfileError}
-            memoryProfileLoading={memoryProfileLoading}
-            memoryProfileSaving={memoryProfileSaving}
-            saveMemoryProfile={saveMemoryProfile}
-            setMemoryProfileDraft={setMemoryProfileDraft}
-          />
+          {/* 用户长期记忆 */}
+          <div className={`coze-accordion-item ${expandedSections.memoryUser ? 'expanded' : ''}`}>
+            <div className="coze-accordion-header" onClick={() => toggleSection('memoryUser')}>
+              <div className="coze-header-left">
+                <ChevronRight size={14} className="coze-caret-icon" />
+                <span>长期记忆 / 用户画像</span>
+              </div>
+            </div>
+            <div className="coze-accordion-body">
+              <AgentMemoryProfilePanel
+                activeAgentId={activeAgentId}
+                canEditActive={canEditActive}
+                deleteMemoryProfile={deleteMemoryProfile}
+                memoryProfile={memoryProfile}
+                memoryProfileDraft={memoryProfileDraft}
+                memoryProfileError={memoryProfileError}
+                memoryProfileLoading={memoryProfileLoading}
+                memoryProfileSaving={memoryProfileSaving}
+                saveMemoryProfile={saveMemoryProfile}
+                setMemoryProfileDraft={setMemoryProfileDraft}
+              />
+            </div>
+          </div>
 
           {promptTemplateDialogOpen && (
             <PromptTemplateDialog
@@ -579,25 +606,58 @@ export function BuilderView(props) {
             />
           )}
 
-          <Panel title="对话体验" icon={<Sparkles size={16} />}>
-            <label className="field-label">开场白文案</label>
-            <textarea value={agentForm.opening_message} onChange={(e) => setAgentForm({ ...agentForm, opening_message: e.target.value })} placeholder="开场白" />
-            <small className="counter">{agentForm.opening_message?.length ?? 0}/1000</small>
-            <ConfigRow label="开场白预置问题"><span className="muted">全部显示</span></ConfigRow>
-            <div className="dynamic-list">
-              {(agentForm.suggested_questions || []).map((question, index) => (
-                <div className="list-row" key={index}>
-                  <input value={question} onChange={(e) => updateSuggestedQuestion(index, e.target.value)} />
-                  <button type="button" onClick={() => removeSuggestedQuestion(index)}>删除</button>
+          {/* ==================== 对话体验 ==================== */}
+          <div className="coze-group-title">对话体验</div>
+          <div className={`coze-accordion-item ${expandedSections.onboarding ? 'expanded' : ''}`}>
+            <div className="coze-accordion-header" onClick={() => toggleSection('onboarding')}>
+              <div className="coze-header-left">
+                <ChevronRight size={14} className="coze-caret-icon" />
+                <span>开场白与引导问题</span>
+              </div>
+            </div>
+            <div className="coze-accordion-body">
+              <label className="field-label" style={{ fontWeight: 600, color: '#374151', fontSize: '13px' }}>开场白文案</label>
+              <textarea 
+                value={agentForm.opening_message} 
+                onChange={(e) => setAgentForm({ ...agentForm, opening_message: e.target.value })} 
+                placeholder="例如：你好！我是智能助理，今天有什么可以帮您的？" 
+                style={{ width: '100%', minHeight: '80px', padding: '10px', borderRadius: '8px', border: '1px solid #dfe4ef', marginTop: '6px', fontSize: '13px' }}
+              />
+              <small className="counter" style={{ display: 'block', textAlign: 'right', margin: '4px 0 10px', color: '#94a3b8' }}>
+                {agentForm.opening_message?.length ?? 0}/1000
+              </small>
+              
+              <div style={{ borderTop: '1px solid #eef0f5', paddingTop: '10px', marginTop: '10px' }}>
+                <ConfigRow label="开场引导问题"><span className="muted" style={{ fontSize: '12px', color: '#94a3b8' }}>前台展示</span></ConfigRow>
+                <div className="dynamic-list" style={{ marginTop: '8px' }}>
+                  {(agentForm.suggested_questions || []).map((question, index) => (
+                    <div className="list-row" key={index} style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
+                      <input 
+                        style={{ flex: 1, padding: '6px 10px', border: '1px solid #dfe4ef', borderRadius: '6px', fontSize: '13px' }}
+                        value={question} 
+                        onChange={(e) => updateSuggestedQuestion(index, e.target.value)} 
+                      />
+                      <button 
+                        type="button" 
+                        className="danger text"
+                        style={{ padding: '0 8px', color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px' }}
+                        onClick={() => removeSuggestedQuestion(index)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
+                <button 
+                  type="button" 
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px', color: '#4d43e6', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px' }}
+                  onClick={addSuggestedQuestion}
+                >
+                  <Plus size={12} /> 输入引导问题
+                </button>
+              </div>
             </div>
-            <button type="button" onClick={addSuggestedQuestion}><Plus size={14} />输入开场白引导问题</button>
-            <div className="rules-copy connected">
-              <p>开场引导问题会显示在欢迎区，点击后会作为真实聊天请求发送。</p>
-              <p>当前版本不展示未接入后端的问题自动生成开关或输入方式配置。</p>
-            </div>
-          </Panel>
+          </div>
         </section>
 
         <section className="chat-stage">
