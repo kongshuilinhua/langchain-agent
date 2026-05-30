@@ -2869,6 +2869,7 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
   color: #475467;
   font-size: 12px;
   font-weight: 800;
+  overflow: hidden;
 }
 .message.user > span { background: #eef0ff; color: #4d43e6; }
 .message.user > span {

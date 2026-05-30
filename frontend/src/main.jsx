@@ -991,6 +991,7 @@ function App() {
     event?.preventDefault();
     const text = (explicitText ?? draft ?? homePrompt).trim();
     const outgoingAttachments = chatAttachments;
+    console.log("[DEBUG FRONTEND] sendMessage called. chatMode state:", chatMode, "chatModeRef.current:", chatModeRef.current, "view:", view, "viewRef.current:", viewRef.current);
     if ((!text && !outgoingAttachments.length) || !activeAgentId || busy) return;
     if (viewRef.current !== 'builder' && (!activeSummary || activeSummary.status !== 'published' || !activeSummary.published_version_id)) {
       const firstPublished = chatAgents[0];

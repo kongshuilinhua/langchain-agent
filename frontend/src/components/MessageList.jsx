@@ -2,13 +2,18 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThumbsUp, ThumbsDown, FileText, Search } from 'lucide-react';
+import { AgentAvatar } from './AgentAvatar.jsx';
 
 export function MessageList({ messages, feedbackByMessage = {}, submitFeedback = () => {}, avatar = 'AI' }) {
   return (
     <>
       {messages.map((message, index) => (
         <div key={`${message.role}-${index}-${message.id || ''}`} className={`message ${message.role}`}>
-          <span>{message.role === 'user' ? '我' : avatar}</span>
+          {message.role === 'user' ? (
+            <span>我</span>
+          ) : (
+            <AgentAvatar value={avatar} />
+          )}
           <div className="message-body">
             {message.role === 'assistant' ? (
               <div className={message.error ? 'message-error' : ''}>
