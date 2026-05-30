@@ -1148,18 +1148,55 @@ function AgentMemoryProfilePanel({
 }
 
 function BuilderDebugPanel({ events = [] }) {
+  const [isOpen, setIsOpen] = useState(false);
+  
   return (
-    <div className="builder-debug-panel">
-      <h5>运行时事件流调试</h5>
-      <div className="debug-events-scroll">
-        {events.map((event, idx) => (
-          <div key={event.id || idx} className="debug-event-card">
-            <span>[{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : ''}] {event.event}</span>
-            <p>{debugEventSummary(event)}</p>
-          </div>
-        ))}
-        {events.length === 0 && <p className="muted">暂无运行时调试数据。在右侧聊天框与 Agent 草稿进行对话即可在此处捕捉后端 RAG 检索细节和工具调用延迟。</p>}
+    <div className="builder-debug-panel" style={{ borderTop: '1px solid #eef0f5', paddingTop: '10px', marginTop: '10px', width: '100%' }}>
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'space-between', 
+          cursor: 'pointer', 
+          fontSize: '11px', 
+          fontWeight: 700, 
+          color: '#6b7280',
+          padding: '6px 12px',
+          borderRadius: '8px',
+          background: '#f9fafb',
+          border: '1px solid #e5e7eb',
+          userSelect: 'none',
+          transition: 'all 0.2s ease'
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = '#f3f4f6';
+          e.currentTarget.style.borderColor = '#d1d5db';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = '#f9fafb';
+          e.currentTarget.style.borderColor = '#e5e7eb';
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          🔍 运行时事件流调试 {events.length > 0 && <span style={{ background: '#4d43e6', color: '#fff', padding: '1px 5px', borderRadius: '10px', fontSize: '9px' }}>{events.length}</span>}
+        </span>
+        <span style={{ color: '#4d43e6' }}>{isOpen ? '收起 ✕' : '展开 ⚙️'}</span>
       </div>
+      
+      {isOpen && (
+        <div style={{ marginTop: '10px', maxHeight: '180px', overflowY: 'auto', border: '1px dashed #dfe4ef', borderRadius: '8px', padding: '12px', background: '#fcfcfd' }}>
+          <div className="debug-events-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {events.map((event, idx) => (
+              <div key={event.id || idx} className="debug-event-card" style={{ paddingBottom: '8px', borderBottom: '1px solid #f3f4f6' }}>
+                <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#4b5563' }}>[{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : ''}] {event.event}</span>
+                <p style={{ fontSize: '11px', color: '#6b7280', margin: '4px 0 0', lineHeight: '1.4' }}>{debugEventSummary(event)}</p>
+              </div>
+            ))}
+            {events.length === 0 && <p className="muted" style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'center', margin: '10px 0' }}>暂无运行时调试数据。在右侧聊天框与 Agent 草稿进行对话即可在此处捕捉后端 RAG 检索细节和工具调用延迟。</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
