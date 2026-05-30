@@ -16,7 +16,8 @@ import {
   X,
   SquarePen,
   Layers,
-  ChevronRight
+  ChevronRight,
+  Trash2
 } from 'lucide-react';
 import { MessageList } from '../components/MessageList.jsx';
 import { AgentAvatar } from '../components/AgentAvatar.jsx';
@@ -783,14 +784,50 @@ export function BuilderView(props) {
         </section>
 
         <section className="chat-stage">
-          <header className="stage-header">
+          <header className="stage-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <h2>预览与调试</h2>
               <span className="eyebrow">{activeSummary?.name || '智能体一号'}</span>
             </div>
-            <div className="mode-toggle" title="选择调试版本">
-              <button type="button" className={chatMode === 'draft' ? 'active' : ''} onClick={() => setChatMode('draft')}>草稿调试</button>
-              <button type="button" className={chatMode === 'published' ? 'active' : ''} onClick={() => setChatMode('published')}>已发布预览</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <button
+                type="button"
+                className="coze-add-button"
+                style={{
+                  background: '#ffffff',
+                  border: '1px solid #dfe4ef',
+                  color: '#667085',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '5px 10px',
+                  fontSize: '12px',
+                  borderRadius: '6px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                  height: '28px'
+                }}
+                onClick={startNewChat}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = '#4d43e6';
+                  e.currentTarget.style.color = '#4d43e6';
+                  e.currentTarget.style.background = 'rgba(77, 67, 230, 0.02)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = '#dfe4ef';
+                  e.currentTarget.style.color = '#667085';
+                  e.currentTarget.style.background = '#ffffff';
+                }}
+              >
+                <Trash2 size={13} />
+                <span>清空会话</span>
+              </button>
+              <div className="mode-toggle" title="选择调试版本" style={{ margin: 0 }}>
+                <button type="button" className={chatMode === 'draft' ? 'active' : ''} onClick={() => setChatMode('draft')}>草稿调试</button>
+                <button type="button" className={chatMode === 'published' ? 'active' : ''} onClick={() => setChatMode('published')}>已发布预览</button>
+              </div>
             </div>
           </header>
           <div className="messages">
