@@ -1042,7 +1042,11 @@ function ChatComposer({
           </button>
         </div>
       </div>
-      {runtimeWarning && <p className="runtime-warning">{runtimeWarning?.text || runtimeWarning}</p>}
+      {typeof runtimeWarning === 'object' ? (
+        runtimeWarning?.text ? <p className="runtime-warning">{runtimeWarning.text}</p> : null
+      ) : (
+        runtimeWarning ? <p className="runtime-warning">{runtimeWarning}</p> : null
+      )}
     </form>
   );
 }
