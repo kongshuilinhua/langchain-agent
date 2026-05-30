@@ -86,11 +86,28 @@ export function CodeBlock({ language, code }) {
 }
 
 export function MessageSources({ sources }) {
-  const visible = sources.slice(0, 4);
-  const hiddenCount = Math.max(0, sources.length - visible.length);
+  // 根据文档ID或标题进行去重，避免对同一文档的多个分片重复渲染完全相同的卡片
+  const uniqueSources = [];
+  const seenDocs = new Set();
+  
+  for (const src of sources) {
+    const docKey = src.document_id || src.title || src.source_id;
+    if (docKey) {
+      if (!seenDocs.has(docKey)) {
+        seenDocs.add(docKey);
+        uniqueSources.push(src);
+      }
+    } else {
+      uniqueSources.push(src);
+    }
+  }
+
+  const visible = uniqueSources.slice(0, 4);
+  const hiddenCount = Math.max(0, uniqueSources.length - visible.length);
+  
   return (
     <details className="message-sources">
-      <summary>引用来源 <span>{sources.length}</span></summary>
+      <summary>引用来源 <span>{uniqueSources.length}</span></summary>
       <div className="message-source-list">
         {visible.map((source) => <SourceChip key={source.chunk_id || `${source.title}-${source.snippet}`} source={source} />)}
         {hiddenCount > 0 && <span className="source-more">还有 {hiddenCount} 个</span>}

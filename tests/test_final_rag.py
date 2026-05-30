@@ -183,3 +183,45 @@ def test_bm25_search_batching(client, auth_headers, monkeypatch):
         db.commit()
     finally:
         db.close()
+
+
+def test_has_evidence_logic():
+    from core.services.rag import _has_evidence
+
+    # 1. 没有任何召回片段时，应该算作没有证据
+    assert _has_evidence([], "你好") is False
+
+    # 2. 有召回片段，且有关键字精确匹配，应该算作有证据
+    sources_keyword = [
+        {
+            "snippet": "这是一个关于作物 yield 预测的论文",
+            "retrieval_channel": "rrf:dense",
+            "dense_score": 0.20,
+            "score": 0.02,
+        }
+    ]
+    assert _has_evidence(sources_keyword, "yield") is True
+
+    # 3. 有召回片段，无关键字直接重叠，但密集检索分数 >= 0.4，应该算作有证据
+    sources_high_dense = [
+        {
+            "snippet": "作物预测模型采用 CNN-LSTM 网络",
+            "retrieval_channel": "rrf:dense",
+            "dense_score": 0.45,
+            "score": 0.02,
+        }
+    ]
+    assert _has_evidence(sources_high_dense, "作物能预测吗") is True
+
+    # 4. 有召回片段，无关键字直接重叠，密集检索分数 < 0.4 (例如 0.21)，且没有任何关键字重叠（比如打招呼）
+    # 这种情况在旧代码中会因为 rrf 分数 > 0 被错误识别为有证据，新代码应该正确识别为无证据
+    sources_low_dense = [
+        {
+            "snippet": "作物预测模型采用 CNN-LSTM 网络",
+            "retrieval_channel": "rrf:dense",
+            "dense_score": 0.21,
+            "score": 0.02,
+        }
+    ]
+    assert _has_evidence(sources_low_dense, "你好，请问你是谁") is False
+
