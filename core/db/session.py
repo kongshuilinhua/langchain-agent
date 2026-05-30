@@ -46,6 +46,12 @@ def _run_compat_migrations() -> None:
         if "ix_agents_user_model_config_id" not in agent_indexes:
             with engine.begin() as connection:
                 connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agents_user_model_config_id ON agents (user_model_config_id)"))
+        
+        avatar_col = next((col for col in inspector.get_columns("agents") if col["name"] == "avatar"), None)
+        if avatar_col and getattr(avatar_col["type"], "length", None) == 40:
+            if engine.dialect.name == "postgresql":
+                with engine.begin() as connection:
+                    connection.execute(text("ALTER TABLE agents ALTER COLUMN avatar TYPE TEXT"))
     if "user_model_configs" in table_names:
         _ensure_columns(
             "user_model_configs",

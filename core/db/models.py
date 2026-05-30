@@ -99,7 +99,7 @@ class Agent(Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(160))
-    avatar: Mapped[str] = mapped_column(String(40), default="SA")
+    avatar: Mapped[str] = mapped_column(Text, default="SA")
     description: Mapped[str] = mapped_column(Text, default="")
     opening_message: Mapped[str] = mapped_column(Text, default="")
     system_prompt: Mapped[str] = mapped_column(Text, default="")
