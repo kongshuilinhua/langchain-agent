@@ -954,8 +954,10 @@ function App() {
     setThinkingEnabled(false);
     setSearchEnabled(false);
     setChatAttachments([]);
-    setView('home');
-    setActiveNav('chat');
+    if (view !== 'builder') {
+      setView('home');
+      setActiveNav('chat');
+    }
   }
 
   async function submitFeedback(messageId, rating) {
