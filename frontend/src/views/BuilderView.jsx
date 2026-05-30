@@ -394,29 +394,51 @@ export function BuilderView(props) {
             userModels={userModels}
           />
 
-          <Panel title="工具" icon={<Boxes size={16} />}>
-            <div className="section-copy">绑定工具后，Agent 可在运行时调用 builtin、builtin_search 或 HTTP 工具；密钥只显示 has_secret 状态。</div>
-            <div className="builder-tool-header">
-              <span>{agentForm.tool_ids.length} 个已绑定</span>
-              <button type="button" onClick={() => { setView('home'); setActiveNav('tools'); }}>工具库</button>
+          {/* ==================== 技能/工具 ==================== */}
+          <div className="coze-group-title">技能</div>
+          <div className={`coze-accordion-item ${expandedSections.tools ? 'expanded' : ''}`}>
+            <div className="coze-accordion-header" onClick={() => toggleSection('tools')}>
+              <div className="coze-header-left">
+                <ChevronRight size={14} className="coze-caret-icon" />
+                <span>工具 <span className="coze-header-count">({agentForm.tool_ids.length})</span></span>
+              </div>
+              <button 
+                type="button" 
+                className="coze-add-button" 
+                onClick={(e) => { e.stopPropagation(); setToolsModalOpen(true); }}
+              >
+                + 添加
+              </button>
             </div>
-            {tools.map((tool) => (
-              <ToolRow
-                key={tool.id}
-                title={tool.label}
-                desc={tool.description}
-                icon={toolType(tool) === 'builtin_search' ? <Search size={16} /> : <Wand2 size={16} />}
-                enabled={agentForm.tool_ids.includes(tool.id)}
-                meta={`${toolType(tool)} · ${toolHasSecret(tool) ? 'has_secret' : 'no_secret'}`}
-                onClick={() => toggleTool(tool.id, agentForm, setAgentForm)}
-              />
-            ))}
-            {tools.length === 0 && <p className="muted">当前没有可用工具。</p>}
-            <div className="config-note">
-              <strong>工具调用</strong>
-              <span>HTTP 工具由后端执行 HTTPS、私网地址阻断、超时和响应大小限制；前端只提交配置和展示脱敏状态。</span>
+            <div className="coze-accordion-body">
+              {tools.filter(t => agentForm.tool_ids.includes(t.id)).map((tool) => (
+                <div className="coze-bound-card" key={tool.id}>
+                  <div className="coze-bound-card-info" style={{ minWidth: 0, flex: 1 }}>
+                    <span className="coze-bound-card-icon">
+                      {toolType(tool) === 'builtin_search' ? <Search size={14} /> : <Wand2 size={14} />}
+                    </span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div className="coze-bound-card-title">{tool.label}</div>
+                      <div className="coze-bound-card-meta">{tool.description}</div>
+                    </div>
+                  </div>
+                  <button 
+                    type="button" 
+                    className="coze-bound-card-remove" 
+                    title="解绑工具"
+                    onClick={(e) => { e.stopPropagation(); toggleTool(tool.id, agentForm, setAgentForm); }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {agentForm.tool_ids.length === 0 && (
+                <p className="muted" style={{ fontSize: '12px', textAlign: 'center', margin: '10px 0 0' }}>
+                  暂未绑定任何工具，点击“+ 添加”引入能力。
+                </p>
+              )}
             </div>
-          </Panel>
+          </div>
 
           <Panel title="知识" icon={<Database size={16} />}>
             <div className="kb-header">
