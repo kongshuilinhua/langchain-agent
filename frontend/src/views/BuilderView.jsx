@@ -658,6 +658,128 @@ export function BuilderView(props) {
               </div>
             </div>
           </div>
+
+          {/* ==================== 选择工具弹窗 ==================== */}
+          {toolsModalOpen && (
+            <div className="coze-modal-backdrop" onClick={() => setToolsModalOpen(false)}>
+              <div className="coze-modal-container" onClick={(e) => e.stopPropagation()}>
+                <div className="coze-modal-header">
+                  <h3>选择工具 (Select Tool)</h3>
+                  <button className="coze-modal-close-btn" onClick={() => setToolsModalOpen(false)}>✕</button>
+                </div>
+                <div className="coze-modal-body">
+                  <div className="coze-modal-search">
+                    <input 
+                      type="text" 
+                      placeholder="搜索可用工具名称或描述..." 
+                      value={toolsSearch}
+                      onChange={(e) => setToolsSearch(e.target.value)}
+                      autoFocus
+                    />
+                  </div>
+                  <div className="coze-modal-list">
+                    {tools
+                      .filter(t => 
+                        t.label.toLowerCase().includes(toolsSearch.toLowerCase()) || 
+                        t.description.toLowerCase().includes(toolsSearch.toLowerCase())
+                      )
+                      .map((tool) => {
+                        const isAdded = agentForm.tool_ids.includes(tool.id);
+                        return (
+                          <div className="coze-modal-row" key={tool.id}>
+                            <div className="coze-modal-row-info">
+                              <span style={{ fontSize: '16px', marginRight: '8px' }}>
+                                {toolType(tool) === 'builtin_search' ? '🔍' : '🛠️'}
+                              </span>
+                              <strong className="coze-modal-row-title">{tool.label}</strong>
+                              <div className="coze-modal-row-desc">{tool.description}</div>
+                            </div>
+                            <button
+                              type="button"
+                              className={`coze-modal-row-btn ${isAdded ? 'added' : ''}`}
+                              disabled={isAdded}
+                              onClick={() => {
+                                if (isAdded) return;
+                                toggleTool(tool.id, agentForm, setAgentForm);
+                              }}
+                            >
+                              {isAdded ? '已添加' : '添加'}
+                            </button>
+                          </div>
+                        );
+                      })
+                    }
+                    {tools.length === 0 && <p className="muted" style={{ textAlign: 'center' }}>无可用工具。</p>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== 选择知识库弹窗 ==================== */}
+          {kbModalOpen && (
+            <div className="coze-modal-backdrop" onClick={() => setKbModalOpen(false)}>
+              <div className="coze-modal-container" onClick={(e) => e.stopPropagation()}>
+                <div className="coze-modal-header">
+                  <h3>选择知识库 (Select Knowledge Base)</h3>
+                  <button className="coze-modal-close-btn" onClick={() => setKbModalOpen(false)}>✕</button>
+                </div>
+                <div className="coze-modal-body">
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+                    <div className="coze-modal-search" style={{ flex: 1, marginBottom: 0 }}>
+                      <input 
+                        type="text" 
+                        placeholder="搜索我的知识库..." 
+                        value={kbSearch}
+                        onChange={(e) => setKbSearch(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+                    <button 
+                      type="button"
+                      className="coze-modal-row-btn"
+                      style={{ background: '#10b981', borderColor: '#10b981', padding: '0 16px', height: '38px', borderRadius: '8px' }}
+                      onClick={() => {
+                        setKbModalOpen(false);
+                        openKnowledgeDialog();
+                      }}
+                    >
+                      + 新建知识库
+                    </button>
+                  </div>
+                  <div className="coze-modal-list">
+                    {knowledgeBases
+                      .filter(kb => kb.name.toLowerCase().includes(kbSearch.toLowerCase()))
+                      .map((kb) => {
+                        const isAdded = agentForm.knowledge_base_ids.includes(kb.id);
+                        return (
+                          <div className="coze-modal-row" key={kb.id}>
+                            <div className="coze-modal-row-info">
+                              <span style={{ fontSize: '16px', marginRight: '8px' }}>📄</span>
+                              <strong className="coze-modal-row-title">{kb.name}</strong>
+                              <div className="coze-modal-row-desc">{kb.description || '暂无描述信息'}</div>
+                            </div>
+                            <button
+                              type="button"
+                              className={`coze-modal-row-btn ${isAdded ? 'added' : ''}`}
+                              disabled={isAdded}
+                              onClick={() => {
+                                if (isAdded) return;
+                                toggleKb(kb.id, agentForm, setAgentForm);
+                              }}
+                            >
+                              {isAdded ? '已添加' : '添加'}
+                            </button>
+                          </div>
+                        );
+                      })
+                    }
+                    {knowledgeBases.length === 0 && <p className="muted" style={{ textAlign: 'center' }}>无可用知识库，点击右上角新建。</p>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="chat-stage">
