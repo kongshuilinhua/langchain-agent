@@ -3330,8 +3330,120 @@ function formFromTool(tool, overrides = {}) {
   };
 }
 
-function isUserTool(tool) {
-  return Boolean(tool?.created_by);
+// Dual-way parameter translator: Array <=> JSON Schema string
+function paramsToSchema(paramsArray) {
+  const schema = {};
+  paramsArray.forEach(p => {
+    if (p.name.trim()) {
+      schema[p.name.trim()] = {
+        type: p.type || 'string',
+        required: Boolean(p.required),
+        description: p.description || ''
+      };
+    }
+  });
+  return JSON.stringify(schema, null, 2);
+}
+
+function schemaToParams(schemaStr) {
+  try {
+    const schema = JSON.parse(schemaStr || '{}');
+    return Object.entries(schema).map(([name, spec], index) => ({
+      id: `${name}-${index}-${Date.now()}-${Math.random()}`,
+      name,
+      type: spec?.type || 'string',
+      required: Boolean(spec?.required),
+      description: spec?.description || ''
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
+function ParamTableEditor({ label, params, onChange }) {
+  const addRow = () => {
+    const newRow = {
+      id: `param-${Date.now()}-${Math.random()}`,
+      name: '',
+      type: 'string',
+      required: false,
+      description: ''
+    };
+    onChange([...params, newRow]);
+  };
+
+  const removeRow = (id) => {
+    onChange(params.filter(p => p.id !== id));
+  };
+
+  const updateRow = (id, patch) => {
+    onChange(params.map(p => p.id === id ? { ...p, ...patch } : p));
+  };
+
+  return (
+    <div className="param-table-editor-wrapper" style={{ marginTop: '14px', border: '1px solid #dfe4ef', borderRadius: '10px', padding: '14px', background: '#f8fafc' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <strong style={{ fontSize: '13px', color: '#1f2937' }}>{label}</strong>
+        <button 
+          type="button" 
+          onClick={addRow}
+          style={{ background: '#eef2ff', color: '#4d43e6', border: '1px solid #c7d2fe', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
+        >
+          + 添加参数
+        </button>
+      </div>
+      
+      {params.length === 0 ? (
+        <p style={{ fontStyle: 'italic', fontSize: '12px', color: '#94a3b8', margin: '4px 0', textAlign: 'center' }}>暂无参数，点击右上角一键添加。</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {params.map((row) => (
+            <div key={row.id} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input 
+                type="text" 
+                placeholder="参数名" 
+                value={row.name} 
+                onChange={(e) => updateRow(row.id, { name: e.target.value })}
+                style={{ flex: 2, padding: '5px 8px', border: '1px solid #dfe4ef', borderRadius: '6px', fontSize: '12px', color: '#111827' }}
+              />
+              <select 
+                value={row.type} 
+                onChange={(e) => updateRow(row.id, { type: e.target.value })}
+                style={{ flex: 1.5, padding: '5px 8px', border: '1px solid #dfe4ef', borderRadius: '6px', fontSize: '12px', background: '#fff', color: '#111827' }}
+              >
+                <option value="string">string</option>
+                <option value="number">number</option>
+                <option value="integer">integer</option>
+                <option value="boolean">boolean</option>
+              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '12px', color: '#4b5563', padding: '0 4px', whiteSpace: 'nowrap' }}>
+                <input 
+                  type="checkbox" 
+                  checked={row.required} 
+                  onChange={(e) => updateRow(row.id, { required: e.target.checked })} 
+                />
+                必填
+              </label>
+              <input 
+                type="text" 
+                placeholder="参数描述或说明" 
+                value={row.description} 
+                onChange={(e) => updateRow(row.id, { description: e.target.value })}
+                style={{ flex: 3, padding: '5px 8px', border: '1px solid #dfe4ef', borderRadius: '6px', fontSize: '12px', color: '#111827' }}
+              />
+              <button 
+                type="button" 
+                onClick={() => removeRow(row.id)}
+                style={{ background: '#fee2e2', color: '#ef4444', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, setProfileError, testToolConfig, tools, updateToolConfig }) {
@@ -3346,6 +3458,12 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
   const [testBodyById, setTestBodyById] = useState({});
   const [testResults, setTestResults] = useState({});
   const [secretDialogTool, setSecretDialogTool] = useState(null);
+  
+  // States for visual parameter editor
+  const [headersParams, setHeadersParams] = useState([]);
+  const [queryParams, setQueryParams] = useState([]);
+  const [bodyParams, setBodyParams] = useState([]);
+
   const isHttpForm = form.type === 'http';
   const needsBodySchema = isHttpForm && !['GET', 'DELETE'].includes(String(form.method || '').toUpperCase());
   const needsAuthSecret = isHttpForm && form.auth_type !== 'none';
@@ -3359,6 +3477,9 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
       name: current.name && current.type === type ? current.name : preset.name,
       auth_type: type === 'builtin_search' ? 'none' : current.auth_type || preset.auth_type,
     }));
+    setHeadersParams(schemaToParams(preset.headers_schema));
+    setQueryParams(schemaToParams(preset.query_schema));
+    setBodyParams(schemaToParams(preset.body_schema));
   }
 
   function updateToolForm(patch) {
@@ -3366,6 +3487,7 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
       const next = { ...current, ...patch };
       if (Object.prototype.hasOwnProperty.call(patch, 'method') && ['GET', 'DELETE'].includes(String(patch.method).toUpperCase())) {
         next.body_schema = '{}';
+        setBodyParams([]);
       }
       if (Object.prototype.hasOwnProperty.call(patch, 'auth_type')) {
         if (patch.auth_type === 'none') {
@@ -3383,7 +3505,11 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
   }
 
   function openToolForm(type = 'http') {
-    setForm(createToolForm(type));
+    const defaultForm = createToolForm(type);
+    setForm(defaultForm);
+    setHeadersParams(schemaToParams(defaultForm.headers_schema));
+    setQueryParams(schemaToParams(defaultForm.query_schema));
+    setBodyParams(schemaToParams(defaultForm.body_schema));
     setEditingTool(null);
     setNotice('');
     setProfileError('');
@@ -3391,7 +3517,11 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
   }
 
   function openEditTool(tool) {
-    setForm(formFromTool(tool));
+    const editForm = formFromTool(tool);
+    setForm(editForm);
+    setHeadersParams(schemaToParams(editForm.headers_schema));
+    setQueryParams(schemaToParams(editForm.query_schema));
+    setBodyParams(schemaToParams(editForm.body_schema));
     setEditingTool(tool);
     setNotice('');
     setProfileError('');
@@ -3399,7 +3529,11 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
   }
 
   function openCopyTool(tool) {
-    setForm(formFromTool(tool, { name: `${tool.name || 'tool'}_copy`, label: `${tool.label || tool.name} 副本`, enabled: true }));
+    const copyForm = formFromTool(tool, { name: `${tool.name || 'tool'}_copy`, label: `${tool.label || tool.name} 副本`, enabled: true });
+    setForm(copyForm);
+    setHeadersParams(schemaToParams(copyForm.headers_schema));
+    setQueryParams(schemaToParams(copyForm.query_schema));
+    setBodyParams(schemaToParams(copyForm.body_schema));
     setEditingTool(null);
     setNotice('');
     setProfileError('');
@@ -3583,22 +3717,35 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
                   <textarea value={form.description} onChange={(event) => updateToolForm({ description: event.target.value })} placeholder="工具能力说明" />
                 </label>
               </div>
-              <div className="tool-schema-grid">
+              {/* 可视化参数结构编辑器 */}
+              <div className="coze-param-editor-container" style={{ gridColumn: 'span 2', display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px' }}>
                 {isHttpForm && (
-                  <label className="field-stack">
-                    <span>headers_schema</span>
-                    <textarea value={form.headers_schema} onChange={(event) => updateToolForm({ headers_schema: event.target.value })} />
-                  </label>
+                  <ParamTableEditor 
+                    label="Headers 参数结构定义 (headers_schema)" 
+                    params={headersParams} 
+                    onChange={(next) => {
+                      setHeadersParams(next);
+                      updateToolForm({ headers_schema: paramsToSchema(next) });
+                    }} 
+                  />
                 )}
-                <label className="field-stack">
-                  <span>{isHttpForm ? 'query_schema' : 'search_query_schema'}</span>
-                  <textarea value={form.query_schema} onChange={(event) => updateToolForm({ query_schema: event.target.value })} />
-                </label>
+                <ParamTableEditor 
+                  label={isHttpForm ? "Query 请求参数定义 (query_schema)" : "联网搜索参数定义 (search_query_schema)"} 
+                  params={queryParams} 
+                  onChange={(next) => {
+                    setQueryParams(next);
+                    updateToolForm({ query_schema: paramsToSchema(next) });
+                  }} 
+                />
                 {needsBodySchema && (
-                  <label className="field-stack">
-                    <span>body_schema</span>
-                    <textarea value={form.body_schema} onChange={(event) => updateToolForm({ body_schema: event.target.value })} />
-                  </label>
+                  <ParamTableEditor 
+                    label="Body 请求体定义 (body_schema)" 
+                    params={bodyParams} 
+                    onChange={(next) => {
+                      setBodyParams(next);
+                      updateToolForm({ body_schema: paramsToSchema(next) });
+                    }} 
+                  />
                 )}
               </div>
               {isHttpForm && (
@@ -3657,38 +3804,243 @@ function ToolsPanel({ createToolConfig, deleteToolConfig, requestDeleteConfirm, 
 
       {notice && <p className="model-row-warning">{notice}</p>}
 
-      <div className="tool-list">
-        {tools.map((tool) => (
-          <article className="tool-list-row" key={tool.id}>
-            <div className="tool-row-main">
-              <span className={`tool-kind ${toolType(tool)}`}>{toolType(tool)}</span>
-              <div>
-                <strong>{tool.label || tool.name}</strong>
-                <small>{tool.name} · {tool.description || '暂无说明'}</small>
+      <div className="tool-list" style={{ gap: '12px' }}>
+        {tools.map((tool) => {
+          const type = toolType(tool);
+          const isHttp = type === 'http';
+          const isSearch = type === 'builtin_search';
+          const isBuiltin = type === 'builtin';
+
+          // Type Badges styling
+          let typeStyle = { background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb' };
+          if (isSearch) typeStyle = { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' };
+          else if (isBuiltin) typeStyle = { background: '#f3e8ff', color: '#6b21a8', border: '1px solid #e9d5ff' };
+          else if (isHttp) typeStyle = { background: '#dcfce7', color: '#15803d', border: '1px solid #bbf7d0' };
+
+          const enabled = tool.enabled !== false;
+          
+          return (
+            <article 
+              className="tool-list-row" 
+              key={tool.id}
+              style={{
+                transition: 'all 0.2s ease',
+                border: '1px solid #e5e7eb',
+                borderRadius: '12px',
+                padding: '16px',
+                background: '#ffffff',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#4d43e6';
+                e.currentTarget.style.boxShadow = '0 10px 20px rgba(77, 67, 230, 0.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb';
+                e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.02)';
+              }}
+            >
+              <div className="tool-row-main" style={{ display: 'flex', gap: '14px', alignItems: 'center', minWidth: 0, flex: 1 }}>
+                <span 
+                  className={`tool-kind ${type}`} 
+                  style={{
+                    ...typeStyle,
+                    padding: '4px 10px',
+                    borderRadius: '20px',
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}
+                >
+                  {type}
+                </span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <strong style={{ fontSize: '14px', fontWeight: 700, color: '#111827' }}>{tool.label || tool.name}</strong>
+                    <span 
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        fontSize: '11px',
+                        background: enabled ? 'rgba(16, 185, 129, 0.08)' : 'rgba(107, 114, 128, 0.08)',
+                        color: enabled ? '#10b981' : '#6b7280',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: enabled ? '#10b981' : '#6b7280' }} />
+                      {enabled ? '已启用' : '已禁用'}
+                    </span>
+                  </div>
+                  <small style={{ display: 'block', marginTop: '4px', fontSize: '12px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tool.description}>
+                    <code style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: '4px', marginRight: '6px', fontSize: '11px', fontFamily: 'monospace', color: '#4b5563' }}>
+                      {tool.name}
+                    </code>
+                    {tool.description || '暂无详细说明'}
+                  </small>
+                </div>
               </div>
-            </div>
-            <div className="tool-row-meta">
-              <span className={tool.enabled !== false ? 'enabled' : ''}>{tool.enabled === false ? '停用' : '启用'}</span>
-              <span>{tool.method || 'GET'}</span>
-              <span>{tool.timeout_seconds || 10}s</span>
-              <span>{toolHasSecret(tool) ? 'has_secret' : 'no_secret'}</span>
-            </div>
-            <div className="tool-row-actions">
-              <button type="button" disabled={testingId === tool.id} onClick={() => openToolTest(tool)}>{testingId === tool.id ? '测试中...' : '测试'}</button>
-              {isUserTool(tool) ? (
-                <>
-                  <button type="button" disabled={saving} onClick={() => openEditTool(tool)}>编辑</button>
-                  <button type="button" disabled={saving} onClick={() => patchTool(tool, { enabled: tool.enabled === false })}>{tool.enabled === false ? '启用' : '停用'}</button>
-                  {toolType(tool) === 'http' && <button type="button" disabled={saving} onClick={() => setSecretDialogTool(tool)}>替换 Secret</button>}
-                  <button className="model-delete-button" type="button" disabled={saving} onClick={() => deleteTool(tool)}><Trash2 size={14} />删除</button>
-                </>
-              ) : (
-                <button type="button" disabled={saving} onClick={() => openCopyTool(tool)}>复制为自定义</button>
-              )}
-            </div>
-          </article>
-        ))}
-        {tools.length === 0 && <p className="muted">当前没有可用工具。保存 builtin_search 或 HTTP 工具后即可在 Builder 中绑定。</p>}
+
+              <div className="tool-row-meta" style={{ display: 'flex', gap: '12px', alignItems: 'center', color: '#4b5563', fontSize: '12px' }}>
+                <span style={{ background: '#f3f4f6', padding: '3px 8px', borderRadius: '6px', fontWeight: 'bold', color: '#374151' }}>
+                  {tool.method || 'GET'}
+                </span>
+                <span style={{ color: '#9ca3af' }}>|</span>
+                <span>超时 {tool.timeout_seconds || 10}s</span>
+                <span style={{ color: '#9ca3af' }}>|</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: toolHasSecret(tool) ? '#b45309' : '#6b7280' }}>
+                  <KeyRound size={12} />
+                  {toolHasSecret(tool) ? '已配密钥' : '免鉴权'}
+                </span>
+              </div>
+
+              <div className="tool-row-actions" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button 
+                  type="button" 
+                  disabled={testingId === tool.id} 
+                  onClick={() => openToolTest(tool)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(77, 67, 230, 0.08)',
+                    color: '#4d43e6',
+                    border: '1px solid rgba(77, 67, 230, 0.15)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                  }}
+                >
+                  <Sparkles size={13} />
+                  {testingId === tool.id ? '测试中...' : '测试'}
+                </button>
+                {isUserTool(tool) ? (
+                  <>
+                    <button 
+                      type="button" 
+                      disabled={saving} 
+                      onClick={() => openEditTool(tool)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        background: '#ffffff',
+                        border: '1px solid #dfe4ef',
+                        color: '#374151',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <SquarePen size={13} />
+                      编辑
+                    </button>
+                    <button 
+                      type="button" 
+                      disabled={saving} 
+                      onClick={() => patchTool(tool, { enabled: tool.enabled === false })}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        background: '#ffffff',
+                        border: '1px solid #dfe4ef',
+                        color: enabled ? '#d97706' : '#059669',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <Shield size={13} />
+                      {enabled ? '禁用' : '启用'}
+                    </button>
+                    {isHttp && (
+                      <button 
+                        type="button" 
+                        disabled={saving} 
+                        onClick={() => setSecretDialogTool(tool)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          background: '#ffffff',
+                          border: '1px solid #dfe4ef',
+                          color: '#4b5563',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                        }}
+                      >
+                        <KeyRound size={13} />
+                        更新密钥
+                      </button>
+                    )}
+                    <button 
+                      className="model-delete-button" 
+                      type="button" 
+                      disabled={saving} 
+                      onClick={() => deleteTool(tool)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        background: '#fee2e2',
+                        border: '1px solid #fecaca',
+                        color: '#ef4444',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <Trash2 size={13} />
+                      删除
+                    </button>
+                  </>
+                ) : (
+                  <button 
+                    type="button" 
+                    disabled={saving} 
+                    onClick={() => openCopyTool(tool)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      background: 'rgba(77, 67, 230, 0.05)',
+                      border: '1px solid rgba(77, 67, 230, 0.15)',
+                      color: '#4d43e6',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                    }}
+                  >
+                    <Layers size={13} />
+                    复制为自定义
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+        {tools.length === 0 && (
+          <p className="muted" style={{ padding: '24px', textAlign: 'center', background: '#f9fafb', borderRadius: '12px', border: '1px dashed #e5e7eb', color: '#6b7280' }}>
+            当前没有可用工具。保存 builtin_search 或 HTTP 工具后即可在 Builder 中绑定。
+          </p>
+        )}
       </div>
       {testingTool && (
         <div className="profile-dialog-backdrop">

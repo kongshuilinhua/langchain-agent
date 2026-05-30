@@ -46,6 +46,7 @@ def ensure_builtin_tools(db: Session) -> None:
         tool = db.query(Tool).filter(Tool.name == name, Tool.type == "builtin").first()
         if tool:
             tool.description = impl["description"]
+            tool.label = name
             tool.enabled = True
             continue
         db.add(Tool(name=name, label=name, description=impl["description"], schema={}, type="builtin", enabled=True))
