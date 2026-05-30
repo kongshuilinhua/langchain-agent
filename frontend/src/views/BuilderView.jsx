@@ -15,7 +15,8 @@ import {
   FileText,
   X,
   SquarePen,
-  Layers
+  Layers,
+  ChevronRight
 } from 'lucide-react';
 import { MessageList } from '../components/MessageList.jsx';
 import { AgentAvatar } from '../components/AgentAvatar.jsx';
@@ -190,6 +191,28 @@ export function BuilderView(props) {
 
   const selectedModel = findModelForForm(models, userModels, agentForm);
   const promptEditorRef = useRef(null);
+
+  // Coze Redesign Collapsible panel states
+  const [expandedSections, setExpandedSections] = useState({
+    tools: true,
+    kb: true,
+    memorySession: true,
+    memoryUser: false,
+    onboarding: false,
+  });
+
+  // Modal open states
+  const [toolsModalOpen, setToolsModalOpen] = useState(false);
+  const [kbModalOpen, setKbModalOpen] = useState(false);
+  
+  // Search filter states
+  const [toolsSearch, setToolsSearch] = useState('');
+  const [kbSearch, setKbSearch] = useState('');
+
+  const toggleSection = (key) => {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const [promptTemplateDialogOpen, setPromptTemplateDialogOpen] = useState(false);
   const [promptTemplateForm, setPromptTemplateForm] = useState(() => defaultPromptTemplateForm());
   const [promptTemplateSaving, setPromptTemplateSaving] = useState(false);
