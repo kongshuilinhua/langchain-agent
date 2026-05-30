@@ -440,34 +440,86 @@ export function BuilderView(props) {
             </div>
           </div>
 
-          <Panel title="知识" icon={<Database size={16} />}>
-            <div className="kb-header">
-              <strong>知识库</strong>
-              <span>{agentForm.rag?.enabled_by_default ? '默认检索' : '默认关闭'}</span>
+          {/* ==================== 知识/文本 ==================== */}
+          <div className="coze-group-title">知识</div>
+          <div className={`coze-accordion-item ${expandedSections.kb ? 'expanded' : ''}`}>
+            <div className="coze-accordion-header" onClick={() => toggleSection('kb')}>
+              <div className="coze-header-left">
+                <ChevronRight size={14} className="coze-caret-icon" />
+                <span>文本 <span className="coze-header-count">({agentForm.knowledge_base_ids.length})</span></span>
+              </div>
+              <button 
+                type="button" 
+                className="coze-add-button" 
+                onClick={(e) => { e.stopPropagation(); setKbModalOpen(true); }}
+              >
+                + 添加
+              </button>
             </div>
-            <div className="media-tabs">
-              <button type="button" className="active">文本</button>
-              <button type="button" className="active">文件</button>
+            <div className="coze-accordion-body">
+              {knowledgeBases.filter(kb => agentForm.knowledge_base_ids.includes(kb.id)).map((kb) => {
+                const isSelectedForUpload = String(docForm.kb_id) === String(kb.id);
+                return (
+                  <div key={kb.id} style={{ marginBottom: '8px' }}>
+                    <div 
+                      className="coze-bound-card" 
+                      style={{ 
+                        cursor: 'pointer', 
+                        borderColor: isSelectedForUpload ? '#4d43e6' : '#dfe4ef',
+                        background: isSelectedForUpload ? 'rgba(77, 67, 230, 0.02)' : '#f8fafc'
+                      }}
+                      onClick={() => setDocForm((current) => ({ ...current, kb_id: String(kb.id) }))}
+                    >
+                      <div className="coze-bound-card-info" style={{ minWidth: 0, flex: 1 }}>
+                        <span className="coze-bound-card-icon kb">
+                          <Database size={14} />
+                        </span>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div className="coze-bound-card-title">{kb.name}</div>
+                          <div className="coze-bound-card-meta">{kb.description || '无描述'}</div>
+                        </div>
+                      </div>
+                      <button 
+                        type="button" 
+                        className="coze-bound-card-remove" 
+                        title="解绑知识库"
+                        onClick={(e) => { e.stopPropagation(); toggleKb(kb.id, agentForm, setAgentForm); }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    
+                    {/* Only show upload documents list if this KB card is selected */}
+                    {isSelectedForUpload && (
+                      <div style={{ marginTop: '8px', padding: '12px', background: '#ffffff', border: '1px dashed #dfe4ef', borderRadius: '8px' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#4d43e6', marginBottom: '8px' }}>
+                          📂 知识文档管理 (当前知识库: “{kb.name}”)
+                        </div>
+                        <KnowledgeDocumentList 
+                          documents={documents.filter(doc => String(doc.knowledge_base_id) === String(kb.id))} 
+                          deleteDocument={deleteDocument} 
+                        />
+                        <div style={{ marginTop: '10px' }}>
+                          <KnowledgeUploadBox
+                            docForm={docForm}
+                            setDocForm={setDocForm}
+                            uploadDocument={uploadDocument}
+                            uploadKnowledgeFile={uploadKnowledgeFile}
+                            uploadingKnowledgeFile={uploadingKnowledgeFile}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {agentForm.knowledge_base_ids.length === 0 && (
+                <p className="muted" style={{ fontSize: '12px', textAlign: 'center', margin: '10px 0 0' }}>
+                  暂未绑定任何知识库，点击“+ 添加”引入检索数据。
+                </p>
+              )}
             </div>
-            <div className="pill-list">
-              {knowledgeBases.map((kb) => (
-                <button type="button" key={kb.id} className={agentForm.knowledge_base_ids.includes(kb.id) ? 'selected' : ''} onClick={() => toggleKb(kb.id, agentForm, setAgentForm)}>{kb.name}</button>
-              ))}
-            </div>
-            <button className="builder-add-resource" type="button" onClick={openKnowledgeDialog}><Plus size={14} />新建知识库</button>
-            <select value={docForm.kb_id} onChange={(e) => setDocForm({ ...docForm, kb_id: e.target.value })}>
-              <option value="">选择知识库</option>
-              {knowledgeBases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}
-            </select>
-            <KnowledgeDocumentList documents={documents} deleteDocument={deleteDocument} />
-            <KnowledgeUploadBox
-              docForm={docForm}
-              setDocForm={setDocForm}
-              uploadDocument={uploadDocument}
-              uploadKnowledgeFile={uploadKnowledgeFile}
-              uploadingKnowledgeFile={uploadingKnowledgeFile}
-            />
-          </Panel>
+          </div>
 
           <Panel title="记忆" icon={<KeyRound size={16} />}>
             <ConfigRow label="会话记忆">
