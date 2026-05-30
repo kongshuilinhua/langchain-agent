@@ -1,0 +1,347 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+from dataclasses import dataclass
+from typing import Iterable
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from core.config import get_settings
+from core.db.models import KnowledgeChunk, KnowledgeDocument
+from core.integrations.llm import OpenAICompatibleProvider
+from core.integrations import vector_store as vector_store_module
+from core.services.rag_cache import redis_store
+
+
+BM25_BATCH_SIZE = 1000
+
+
+@dataclass
+class RagResult:
+    sources: list[dict]
+    status: dict
+
+
+def retrieve(
+    db: Session,
+    *,
+    workspace_id: int,
+    knowledge_base_ids: list[int],
+    query: str,
+    config: dict,
+    runtime_config: dict | None = None,
+) -> RagResult:
+    settings = get_settings()
+    started_status = _base_status(query, knowledge_base_ids, config)
+    if not knowledge_base_ids:
+        started_status.update({"reason": "no_knowledge_base", "no_evidence": True})
+        return RagResult([], started_status)
+
+    cache_key = _cache_key(db, workspace_id=workspace_id, knowledge_base_ids=knowledge_base_ids, query=query, config=config)
+    if config.get("cache_enabled", True):
+        cached = redis_store.get_json(cache_key)
+        if cached.hit and cached.value:
+            status = cached.value.get("status", {})
+            status.update({"cache": {"enabled": True, "hit": True, "backend": cached.backend}})
+            return RagResult(cached.value.get("sources", []), status)
+
+    provider = OpenAICompatibleProvider()
+    query_vector = provider.embed(query, runtime_config=runtime_config)
+    dense_hits = _dense_search(
+        workspace_id=workspace_id,
+        knowledge_base_ids=knowledge_base_ids,
+        query_vector=query_vector,
+        limit=int(config.get("dense_top_k") or settings.rag_dense_top_k),
+    )
+    bm25_hits = _bm25_search(
+        db,
+        workspace_id=workspace_id,
+        knowledge_base_ids=knowledge_base_ids,
+        query=query,
+        limit=int(config.get("bm25_top_k") or settings.rag_bm25_top_k),
+    )
+    fused_hits = _rrf(dense_hits, bm25_hits, k=int(config.get("rrf_k") or settings.rag_rrf_k))
+    rerank_applied = False
+    rerank_error = ""
+    final_hits = fused_hits
+    if config.get("rerank_enabled", settings.rag_rerank_enabled) and fused_hits:
+        try:
+            final_hits = _rerank(
+                provider,
+                query=query,
+                hits=fused_hits,
+                top_n=int(config.get("rerank_top_n") or settings.rag_rerank_top_n),
+                model=settings.rag_rerank_model,
+            )
+            rerank_applied = True
+        except Exception as exc:
+            rerank_error = str(exc)[:240]
+            final_hits = fused_hits
+
+    top_k = int(config.get("top_k") or settings.rag_top_k)
+    sources = [_source_payload(hit) for hit in final_hits[:top_k]]
+    no_evidence = not _has_evidence(sources, query)
+    status = started_status | {
+        "reason": "available" if sources else "no_match",
+        "matched_chunks": len(final_hits),
+        "sources_emitted": bool(sources),
+        "dense": {"top_k": int(config.get("dense_top_k") or settings.rag_dense_top_k), "matched": len(dense_hits)},
+        "bm25": {"top_k": int(config.get("bm25_top_k") or settings.rag_bm25_top_k), "matched": len(bm25_hits)},
+        "rrf": {"k": int(config.get("rrf_k") or settings.rag_rrf_k), "matched": len(fused_hits)},
+        "rerank": {
+            "enabled": bool(config.get("rerank_enabled", settings.rag_rerank_enabled)),
+            "applied": rerank_applied,
+            "model": settings.rag_rerank_model,
+            "error": rerank_error or None,
+        },
+        "cache": {"enabled": bool(config.get("cache_enabled", settings.rag_cache_enabled)), "hit": False, "backend": "redis" if redis_store.available else "none"},
+        "no_evidence": no_evidence,
+        "refuse_when_no_evidence": bool(config.get("refuse_when_no_evidence", settings.rag_refuse_when_no_evidence)),
+        "rag_model": "environment",
+    }
+    if config.get("cache_enabled", True):
+        redis_store.set_json(cache_key, {"sources": sources, "status": status}, settings.rag_cache_ttl_seconds)
+    return RagResult(sources, status)
+
+
+def _base_status(query: str, knowledge_base_ids: list[int], config: dict) -> dict:
+    settings = get_settings()
+    return {
+        "enabled": True,
+        "knowledge_base_ids": knowledge_base_ids,
+        "query": query,
+        "top_k": int(config.get("top_k") or settings.rag_top_k),
+        "matched_chunks": 0,
+        "sources_emitted": False,
+        "reason": "started",
+    }
+
+
+def _dense_search(*, workspace_id: int, knowledge_base_ids: list[int], query_vector: list[float], limit: int) -> list[dict]:
+    hits = []
+    for kb_id in knowledge_base_ids:
+        for hit in vector_store_module.vector_store.search(
+            query_vector,
+            limit=limit,
+            filters={"workspace_id": workspace_id, "knowledge_base_id": kb_id},
+        ):
+            metadata = hit.metadata or {}
+            hits.append(
+                {
+                    "id": metadata.get("chunk_id") or hit.vector_id,
+                    "vector_id": hit.vector_id,
+                    "text": hit.text,
+                    "score": float(hit.score),
+                    "dense_score": float(hit.score),
+                    "retrieval_channel": "dense",
+                    "metadata": metadata,
+                }
+            )
+    return sorted(hits, key=lambda item: item["score"], reverse=True)[:limit]
+
+
+def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int], query: str, limit: int) -> list[dict]:
+    query_chunks = (
+        db.query(KnowledgeChunk)
+        .filter(
+            KnowledgeChunk.workspace_id == workspace_id,
+            KnowledgeChunk.knowledge_base_id.in_(knowledge_base_ids)
+        )
+    )
+    
+    total_count = query_chunks.count()
+    if total_count == 0:
+        return []
+        
+    rows_data = []
+    tokenized_corpus = []
+    
+    # 批量载入以避免单次消耗海量内存，并在载入后立即提取轻量字段以释放 SQLAlchemy 重型对象
+    for offset in range(0, total_count, BM25_BATCH_SIZE):
+        batch = query_chunks.order_by(KnowledgeChunk.id.asc()).offset(offset).limit(BM25_BATCH_SIZE).all()
+        for row in batch:
+            tokens = _tokenize(row.text)
+            tokenized_corpus.append(tokens)
+            rows_data.append({
+                "id": row.chunk_id or row.vector_id,
+                "vector_id": row.vector_id,
+                "text": row.text,
+                "metadata": _row_metadata(row),
+                "tokens": tokens
+            })
+        # 释放 SQLAlchemy Session 中的这一批重型缓存对象
+        db.expire_all()
+        
+    tokenized_query = _tokenize(query)
+    scores = _bm25_scores(tokenized_corpus, tokenized_query)
+    hits = []
+    query_token_set = set(tokenized_query)
+    
+    for data, score in zip(rows_data, scores):
+        row_tokens = data["tokens"]
+        overlap = query_token_set.intersection(row_tokens)
+        if score <= 0 and tokenized_query and not overlap:
+            continue
+        if score <= 0 and overlap:
+            score = len(overlap) / max(len(query_token_set), 1)
+        hits.append(
+            {
+                "id": data["id"],
+                "vector_id": data["vector_id"],
+                "text": data["text"],
+                "score": float(score),
+                "bm25_score": float(score),
+                "retrieval_channel": "bm25",
+                "metadata": data["metadata"],
+            }
+        )
+    return sorted(hits, key=lambda item: item["score"], reverse=True)[:limit]
+
+
+def _rrf(dense_hits: list[dict], bm25_hits: list[dict], *, k: int) -> list[dict]:
+    combined: dict[str, dict] = {}
+    for channel, hits in (("dense", dense_hits), ("bm25", bm25_hits)):
+        for rank, hit in enumerate(hits, start=1):
+            key = hit["id"]
+            item = combined.setdefault(key, {**hit, "score": 0.0, "channels": set()})
+            item["score"] += 1 / (k + rank)
+            item["channels"].add(channel)
+            if channel == "dense":
+                item["dense_score"] = hit.get("dense_score", hit.get("score", 0.0))
+            if channel == "bm25":
+                item["bm25_score"] = hit.get("bm25_score", hit.get("score", 0.0))
+    results = []
+    for item in combined.values():
+        channels = sorted(item.pop("channels", []))
+        item["retrieval_channel"] = "rrf:" + "+".join(channels)
+        results.append(item)
+    return sorted(results, key=lambda item: item["score"], reverse=True)
+
+
+def _rerank(provider: OpenAICompatibleProvider, *, query: str, hits: list[dict], top_n: int, model: str) -> list[dict]:
+    documents = [hit["text"] for hit in hits]
+    ranked = provider.rerank(query, documents, top_n=min(top_n, len(documents)), model=model)
+    output = []
+    used = set()
+    for item in ranked:
+        index = item["index"]
+        if index < 0 or index >= len(hits) or index in used:
+            continue
+        used.add(index)
+        hit = {**hits[index]}
+        hit["score"] = float(item.get("relevance_score", hit.get("score", 0)))
+        hit["retrieval_channel"] = "rerank"
+        output.append(hit)
+    output.extend(hit for index, hit in enumerate(hits) if index not in used)
+    return output
+
+
+def _source_payload(hit: dict) -> dict:
+    metadata = hit.get("metadata") or {}
+    title = metadata.get("title") or metadata.get("filename") or f"document-{metadata.get('document_id', '')}".strip("-")
+    return {
+        "source_id": title,
+        "document_id": metadata.get("document_id"),
+        "chunk_id": metadata.get("chunk_id") or hit.get("id"),
+        "parent_id": metadata.get("parent_id") or metadata.get("chunk_id") or hit.get("id"),
+        "title": title or "knowledge",
+        "page": metadata.get("page"),
+        "section": metadata.get("section") or "",
+        "snippet": (hit.get("text") or "")[:360],
+        "score": float(hit.get("score") or 0),
+        "retrieval_channel": hit.get("retrieval_channel") or "dense",
+    }
+
+
+def _row_metadata(row: KnowledgeChunk) -> dict:
+    metadata = dict(row.metadata_ or {})
+    metadata.update(
+        {
+            "workspace_id": row.workspace_id,
+            "knowledge_base_id": row.knowledge_base_id,
+            "document_id": row.document_id,
+            "chunk_id": row.chunk_id or row.vector_id,
+            "parent_id": row.parent_id or row.vector_id,
+            "title": row.title,
+            "page": row.page,
+            "section": row.section,
+            "content_hash": row.content_hash,
+        }
+    )
+    return metadata
+
+
+def _tokenize(text: str) -> list[str]:
+    try:
+        import jieba
+
+        return [token.strip().lower() for token in jieba.lcut(text) if token.strip()]
+    except Exception:
+        return [token.lower() for token in re.findall(r"[\w\u4e00-\u9fff]+", text)]
+
+
+def _bm25_scores(corpus: list[list[str]], query_tokens: list[str]) -> list[float]:
+    if not corpus or not query_tokens:
+        return [0.0 for _ in corpus]
+    try:
+        from rank_bm25 import BM25Okapi
+
+        return [float(score) for score in BM25Okapi(corpus).get_scores(query_tokens)]
+    except Exception:
+        doc_count = len(corpus)
+        avg_len = sum(len(doc) for doc in corpus) / max(doc_count, 1)
+        doc_freq = {}
+        for doc in corpus:
+            for token in set(doc):
+                doc_freq[token] = doc_freq.get(token, 0) + 1
+        scores = []
+        for doc in corpus:
+            score = 0.0
+            length = len(doc) or 1
+            for token in query_tokens:
+                freq = doc.count(token)
+                if not freq:
+                    continue
+                idf = math.log((doc_count - doc_freq.get(token, 0) + 0.5) / (doc_freq.get(token, 0) + 0.5) + 1)
+                denom = freq + 1.5 * (1 - 0.75 + 0.75 * length / max(avg_len, 1))
+                score += idf * (freq * 2.5 / denom)
+            scores.append(score)
+        return scores
+
+
+def _has_evidence(sources: list[dict], query: str) -> bool:
+    if not sources:
+        return False
+    tokens = [token for token in _tokenize(query) if len(token) > 1]
+    if not tokens:
+        return True
+    snippets = " ".join(source.get("snippet", "") for source in sources).lower()
+    return any(token.lower() in snippets for token in tokens) or any(float(source.get("score") or 0) > 0 for source in sources)
+
+
+def _cache_key(db: Session, *, workspace_id: int, knowledge_base_ids: list[int], query: str, config: dict) -> str:
+    stats = (
+        db.query(
+            KnowledgeDocument.knowledge_base_id,
+            func.count(KnowledgeDocument.id),
+            func.max(KnowledgeDocument.updated_at),
+        )
+        .filter(KnowledgeDocument.knowledge_base_id.in_(knowledge_base_ids))
+        .group_by(KnowledgeDocument.knowledge_base_id)
+        .all()
+    )
+    parts = [f"{kb_id}:{count}:{max_updated.isoformat() if max_updated else '0'}" for kb_id, count, max_updated in sorted(stats, key=lambda x: x[0])]
+    version = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    payload = {
+        "workspace_id": workspace_id,
+        "knowledge_base_ids": sorted(knowledge_base_ids),
+        "query": re.sub(r"\s+", " ", query).strip().lower(),
+        "version": version,
+        "config": config,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return f"rag:{digest}"
