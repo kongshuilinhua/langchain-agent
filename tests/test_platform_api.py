@@ -883,7 +883,7 @@ def test_tool_crud_http_security_and_secret_redaction(client, auth_headers):
         headers=auth_headers,
         json={
             "type": "http",
-            "name": "weather_lookup",
+            "name": "custom_weather_lookup",
             "label": "Weather lookup",
             "description": "Fetches weather data",
             "method": "GET",
