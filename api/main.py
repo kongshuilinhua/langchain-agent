@@ -961,7 +961,7 @@ def get_draft(agent_id: int, membership: WorkspaceMember = Depends(get_current_m
 
 @app.get("/api/knowledge-bases")
 def list_knowledge_bases(membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
-    kbs = db.query(KnowledgeBase).filter(KnowledgeBase.workspace_id == membership.workspace_id).all()
+    kbs = db.query(KnowledgeBase).filter(KnowledgeBase.workspace_id == membership.workspace_id).order_by(KnowledgeBase.id.desc()).all()
     items = []
     for kb in kbs:
         count = db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id).count()
@@ -1210,6 +1210,7 @@ def update_workflow(agent_id: int, request: WorkflowUpdateRequest, membership: W
 
 @app.post("/api/agents/{agent_id}/chat/stream")
 def chat_stream(agent_id: int, request: ChatRequest, membership: WorkspaceMember = Depends(get_current_membership), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    print(f"[DEBUG CHAT] agent_id: {agent_id} | mode: {request.mode} | session_id: {request.session_id}")
     agent = require_workspace_agent(db, membership.workspace_id, agent_id)
     require_agent_read_access(agent, membership)
     return StreamingResponse(stream_chat_events(db, agent, current_user.id, request), media_type="text/event-stream")
