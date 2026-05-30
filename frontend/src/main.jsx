@@ -177,6 +177,7 @@ function App() {
   const [agentForm, setAgentForm] = useState(defaultAgentForm());
   const [docForm, setDocForm] = useState({ filename: 'guide.txt', text: '这里是一段知识库资料。', kb_id: '' });
   const [uploadingKnowledgeFile, setUploadingKnowledgeFile] = useState(false);
+  const [uploadingFileName, setUploadingFileName] = useState('');
   const [view, setView] = useState('home');
   const [activeNav, setActiveNav] = useState('chat');
   const [homePrompt, setHomePrompt] = useState('');
@@ -846,6 +847,7 @@ function App() {
       return;
     }
     setUploadingKnowledgeFile(true);
+    setUploadingFileName(file.name);
     setError('');
     try {
       validateKnowledgeFile(file);
@@ -869,6 +871,7 @@ function App() {
       setError(errorMessage(err));
     } finally {
       setUploadingKnowledgeFile(false);
+      setUploadingFileName('');
     }
   }
 
@@ -2291,6 +2294,7 @@ function KnowledgeHome({
           uploadDocument={uploadDocument}
           uploadKnowledgeFile={uploadKnowledgeFile}
           uploadingKnowledgeFile={uploadingKnowledgeFile}
+          uploadingFileName={uploadingFileName}
           docForm={docForm}
           setDocForm={setDocForm}
           handleBack={handleBack}
@@ -2481,6 +2485,7 @@ function KnowledgeWorkspace({
   uploadDocument,
   uploadKnowledgeFile,
   uploadingKnowledgeFile,
+  uploadingFileName,
   docForm,
   setDocForm,
   handleBack,
@@ -2650,6 +2655,20 @@ function KnowledgeWorkspace({
           </div>
 
           <div className="workspace-doc-list">
+            {uploadingKnowledgeFile && (
+              <div className="workspace-doc-row uploading active" style={{ opacity: 0.85, cursor: 'default', borderLeft: '3px solid #4d43e6', background: 'rgba(77, 67, 230, 0.03)', display: 'flex', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #e5e7eb', gap: '8px' }}>
+                <span className="coze-spinner"></span>
+                <div className="doc-row-details" style={{ minWidth: 0, flex: 1 }}>
+                  <strong style={{ color: '#4d43e6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', fontSize: '13px' }}>{uploadingFileName || '正在上传文档...'}</strong>
+                  <small style={{ color: '#667085', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', fontSize: '11px', marginTop: '2px' }}>
+                    正在解析切片向量化...
+                  </small>
+                </div>
+                <span className="document-status indexing" style={{ background: 'rgba(77, 67, 230, 0.08)', color: '#4d43e6', fontSize: '11px', padding: '2px 6px', borderRadius: '4px', whiteSpace: 'nowrap', flexShrink: 0, fontWeight: 600 }}>
+                  上传中
+                </span>
+              </div>
+            )}
             {filteredDocs.map((doc) => {
               const isActive = activeDoc?.id === doc.id;
               const status = doc.status || 'uploaded';
