@@ -1,5 +1,16 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { SquarePen, ImagePlus, FileText, X, Search, Sparkles } from 'lucide-react';
+import {
+  SquarePen,
+  ImagePlus,
+  FileText,
+  X,
+  Search,
+  Sparkles,
+  AlertTriangle,
+  Brain,
+  Database,
+  Send
+} from 'lucide-react';
 import { MessageList } from '../components/MessageList.jsx';
 import {
   reasoningCapabilityForModel,
@@ -86,8 +97,6 @@ export function ChatView({
   uploadingAttachment,
   updateChatVariable,
 }) {
-  const hasChatAgent = chatAgents.length > 0;
-
   return (
     <>
       <header className="chat-topbar">
@@ -197,7 +206,7 @@ function ChatHomeV2({
   const attachmentDisabled = uploadingAttachment || !attachmentAccept;
   const attachmentHint = chatAttachments.length ? `${chatAttachments.length} file ready` : attachmentHintForModel(currentModel);
   const conversationStarted = Boolean(activeSessionId) || messages.some((message) => message.role === 'user');
-  const runtimeWarning = modelWarning || { text: '' }; // Fallback since runtimeStatusMessage might be handled or simple
+  const runtimeWarning = modelWarning || { text: '' }; // Fallback
   const hasChatAgent = chatAgents.length > 0;
 
   return (
@@ -252,7 +261,7 @@ function ChatHomeV2({
             attachments={chatAttachments}
             removeAttachment={(id) => setChatAttachments((items) => items.filter((item) => item.id !== id))}
             onFileDrop={(files) => handleAttachmentDrop(files, uploadChatAttachment)}
-            runtimeWarning={runtimeWarning?.text || runtimeWarning}
+            runtimeWarning={runtimeWarning}
             searchAvailable={searchAvailable}
             searchEnabled={effectiveSearchEnabled}
             searchStatus={searchStatus}
@@ -275,7 +284,7 @@ function ChatHomeV2({
   );
 }
 
-function ChatComposer({
+export function ChatComposer({
   attachmentAccept,
   attachmentDisabled,
   attachmentHint,
@@ -341,91 +350,97 @@ function ChatComposer({
     await onFileDrop?.(event.dataTransfer.files);
   }
 
+  // Safe runtimeWarning extraction to avoid objects in React Child
+  const warningText = typeof runtimeWarning === 'object' ? runtimeWarning?.text : runtimeWarning;
+
   return (
     <form
-      className={`composer ${className || ''} ${dragActive ? 'drag-active' : ''}`}
+      className={`${className} rich-composer ${dragActive ? 'drag-active' : ''}`}
       onSubmit={onSubmit}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
-      onDrop={(event) => handleDrop(event).catch((err) => console.error(err))}
+      onDrop={(event) => {
+        handleDrop(event).catch((err) => console.error(err));
+      }}
     >
       {attachments.length > 0 && (
         <AttachmentPreviewTray attachments={attachments} removeAttachment={removeAttachment} />
       )}
-      <div className="composer-row-main">
-        {includeNewChat && (
-          <button className="new-chat-in-composer" type="button" title="新建会话" onClick={onNewChat}>
-            <Sparkles size={16} />
-          </button>
-        )}
-        <div className="composer-input-wrapper">
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={onAttachmentPaste}
-            placeholder={placeholder}
-          />
+      {warningText && (
+        <div className="composer-warning">
+          <AlertTriangle size={14} />
+          <span>{warningText}</span>
         </div>
-        <button className="send-btn" type="submit" disabled={submitDisabled}>
-          发送
-        </button>
-      </div>
-
-      <div className="composer-toolbar">
-        <div className="toolbar-caps">
-          {attachmentAccept && (
-            <label className={`tool-cap-btn attach-btn ${attachmentDisabled ? 'disabled' : ''}`}>
-              <input
-                type="file"
-                multiple
-                accept={attachmentAccept}
-                disabled={attachmentDisabled}
-                onChange={onAttachmentInput}
-              />
-              <ImagePlus size={15} />
-              <span>{attachmentHint || '上传附件'}</span>
-            </label>
+      )}
+      <textarea
+        ref={textareaRef}
+        className="composer-textarea"
+        rows={1}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={handleKeyDown}
+        onPaste={onAttachmentPaste}
+        placeholder={placeholder}
+      />
+      <div className="composer-actions">
+        <div className="composer-action-left">
+          {includeNewChat && (
+            <button type="button" className="composer-icon-button" title={CHAT_COPY.newChat} onClick={onNewChat}>
+              <SquarePen size={16} />
+            </button>
           )}
-
           <button
             type="button"
-            className={`tool-cap-btn ${searchEnabled ? 'on' : ''} ${!searchAvailable ? 'disabled' : ''}`}
-            disabled={!searchAvailable}
-            onClick={onToggleSearch}
-          >
-            <span>{CHAT_COPY.search}</span>
-            <small>{searchStatus}</small>
-          </button>
-
-          <button
-            type="button"
-            className={`tool-cap-btn ${thinkingEnabled ? 'on' : ''} ${!thinkingCapability.supported ? 'disabled' : ''}`}
-            disabled={!thinkingCapability.supported}
+            className={thinkingEnabled ? 'thinking-toggle on' : 'thinking-toggle'}
+            disabled={!thinkingCapability?.supported}
+            title={thinkingCapability?.tooltip || CHAT_COPY.unavailable}
+            aria-pressed={thinkingEnabled}
             onClick={onToggleThinking}
           >
+            <Brain size={14} />
             <span>{CHAT_COPY.thinking}</span>
-            <small>{thinkingStatusText(thinkingCapability, thinkingEnabled)}</small>
           </button>
-
           <button
             type="button"
-            className={`tool-cap-btn ${ragEnabled ? 'on' : ''} ${!ragAvailable ? 'disabled' : ''}`}
+            className={searchEnabled ? 'search-toggle on' : 'search-toggle'}
+            disabled={!searchAvailable}
+            title={searchStatus}
+            aria-pressed={searchEnabled}
+            onClick={onToggleSearch}
+          >
+            <Search size={14} />
+            <span>{CHAT_COPY.search}</span>
+          </button>
+          <button
+            type="button"
+            className={ragEnabled ? 'rag-toggle on' : 'rag-toggle'}
             disabled={!ragAvailable}
+            title={ragStatus}
+            aria-label={ragStatus}
+            aria-pressed={ragEnabled}
             onClick={onToggleRag}
           >
+            <Database size={14} />
             <span>{CHAT_COPY.rag}</span>
-            <small>{ragStatus}</small>
+          </button>
+        </div>
+        <div className="composer-action-right">
+          <label className={`attachment-button ${attachmentDisabled ? 'disabled' : ''}`} title={attachmentHint}>
+            <AttachmentButtonIcon model={currentModel} size={18} />
+            <input
+              type="file"
+              accept={attachmentAccept || undefined}
+              disabled={attachmentDisabled}
+              multiple
+              onChange={onAttachmentInput}
+              style={{ display: 'none' }}
+            />
+          </label>
+          <button type="submit" className="composer-send-button" disabled={submitDisabled}>
+            <Send size={18} />
           </button>
         </div>
       </div>
-      {typeof runtimeWarning === 'object' ? (
-        runtimeWarning?.text ? <p className="runtime-warning">{runtimeWarning.text}</p> : null
-      ) : (
-        runtimeWarning ? <p className="runtime-warning">{runtimeWarning}</p> : null
-      )}
     </form>
   );
 }
@@ -452,6 +467,10 @@ function AttachmentPreviewTray({ attachments, removeAttachment }) {
       })}
     </div>
   );
+}
+
+function AttachmentButtonIcon({ model, size = 16 }) {
+  return <ImagePlus size={size} />;
 }
 
 function VariableBar({ variables, values, onChange }) {

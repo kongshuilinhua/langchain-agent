@@ -12,13 +12,16 @@ import {
   KeyRound,
   Sparkles,
   ServerCog,
-  FileText
+  FileText,
+  X,
+  SquarePen
 } from 'lucide-react';
 import { MessageList } from '../components/MessageList.jsx';
 import { AgentAvatar } from '../components/AgentAvatar.jsx';
 import { PromptTemplateDialog } from '../components/PromptTemplateDialog.jsx';
 import { KnowledgeBaseDialog } from '../components/KnowledgeBaseDialog.jsx';
 import { KnowledgeDocumentList, KnowledgeUploadBox } from '../components/KnowledgeDocumentList.jsx';
+import { ChatComposer } from './ChatView.jsx';
 import {
   findModelForForm,
   modelCapabilityWarning,
@@ -882,289 +885,16 @@ function BuilderDebugPanel({ events = [] }) {
   );
 }
 
-function ChatComposer({
-  attachmentAccept,
-  attachmentDisabled,
-  attachmentHint,
-  attachments = [],
-  className,
-  currentModel,
-  includeNewChat = false,
-  onAttachmentInput,
-  onAttachmentPaste,
-  onChange,
-  onFileDrop,
-  onNewChat,
-  onSubmit,
-  onToggleRag,
-  onToggleSearch,
-  onToggleThinking,
-  placeholder,
-  removeAttachment,
-  ragAvailable,
-  ragEnabled,
-  ragStatus,
-  searchAvailable,
-  searchEnabled,
-  searchStatus,
-  submitDisabled,
-  thinkingCapability,
-  thinkingEnabled,
-  value,
-  runtimeWarning,
-}) {
-  const textareaRef = useRef(null);
-  const [dragActive, setDragActive] = useState(false);
 
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
-  }, [value]);
 
-  function handleKeyDown(event) {
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    event.preventDefault();
-    event.currentTarget.form?.requestSubmit();
-  }
 
-  function handleDragOver(event) {
-    if (attachmentDisabled || !hasTransferFiles(event.dataTransfer)) return;
-    event.preventDefault();
-    setDragActive(true);
-  }
 
-  function handleDragLeave(event) {
-    if (!event.currentTarget.contains(event.relatedTarget)) {
-      setDragActive(false);
-    }
-  }
 
-  async function handleDrop(event) {
-    if (attachmentDisabled || !hasTransferFiles(event.dataTransfer)) return;
-    event.preventDefault();
-    setDragActive(false);
-    await onFileDrop?.(event.dataTransfer.files);
-  }
 
-  function hasTransferFiles(dt) {
-    if (!dt) return false;
-    if (dt.files && dt.files.length) return true;
-    if (dt.items && dt.items.length) {
-      for (let i = 0; i < dt.items.length; i++) {
-        if (dt.items[i].kind === 'file') return true;
-      }
-    }
-    return false;
-  }
 
-  return (
-    <form
-      className={`composer ${className || ''} ${dragActive ? 'drag-active' : ''}`}
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit(e, value);
-      }}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={(event) => handleDrop(event).catch((err) => console.error(err))}
-    >
-      {attachments.length > 0 && (
-        <AttachmentPreviewTray attachments={attachments} removeAttachment={removeAttachment} />
-      )}
-      <div className="composer-row-main">
-        {includeNewChat && (
-          <button className="new-chat-in-composer" type="button" title="新建会话" onClick={onNewChat}>
-            <Sparkles size={16} />
-          </button>
-        )}
-        <div className="composer-input-wrapper">
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={onAttachmentPaste}
-            placeholder={placeholder}
-          />
-        </div>
-        <button className="send-btn" type="submit" disabled={submitDisabled}>
-          发送
-        </button>
-      </div>
 
-      <div className="composer-toolbar">
-        <div className="toolbar-caps">
-          {attachmentAccept && (
-            <label className={`tool-cap-btn attach-btn ${attachmentDisabled ? 'disabled' : ''}`}>
-              <input
-                type="file"
-                multiple
-                accept={attachmentAccept}
-                disabled={attachmentDisabled}
-                onChange={onAttachmentInput}
-              />
-              <ImagePlus size={15} />
-              <span>{attachmentHint || '上传附件'}</span>
-            </label>
-          )}
 
-          <button
-            type="button"
-            className={`tool-cap-btn ${searchEnabled ? 'on' : ''} ${!searchAvailable ? 'disabled' : ''}`}
-            disabled={!searchAvailable}
-            onClick={onToggleSearch}
-          >
-            <span>{CHAT_COPY.sendMessage ? '联网搜索' : '联网搜索'}</span>
-            <small>{searchStatus}</small>
-          </button>
 
-          <button
-            type="button"
-            className={`tool-cap-btn ${thinkingEnabled ? 'on' : ''} ${!thinkingCapability.supported ? 'disabled' : ''}`}
-            disabled={!thinkingCapability.supported}
-            onClick={onToggleThinking}
-          >
-            <span>{CHAT_COPY.sendMessage ? '深度思考' : '深度思考'}</span>
-            <small>{thinkingStatusText(thinkingCapability, thinkingEnabled)}</small>
-          </button>
 
-          <button
-            type="button"
-            className={`tool-cap-btn ${ragEnabled ? 'on' : ''} ${!ragAvailable ? 'disabled' : ''}`}
-            disabled={!ragAvailable}
-            onClick={onToggleRag}
-          >
-            <span>{CHAT_COPY.sendMessage ? '知识库' : '知识库'}</span>
-            <small>{ragStatus}</small>
-          </button>
-        </div>
-      </div>
-      {typeof runtimeWarning === 'object' ? (
-        runtimeWarning?.text ? <p className="runtime-warning">{runtimeWarning.text}</p> : null
-      ) : (
-        runtimeWarning ? <p className="runtime-warning">{runtimeWarning}</p> : null
-      )}
-    </form>
-  );
-}
-
-function AttachmentPreviewTray({ attachments, removeAttachment }) {
-  const uploadTypeFromContentType = (type) => {
-    if (type?.startsWith('image/')) return 'image';
-    return 'document';
-  };
-
-  return (
-    <div className="attachment-preview-tray">
-      {attachments.map((item) => {
-        const isImage = item.type === 'image' || uploadTypeFromContentType(item.content_type) === 'image';
-        return (
-          <div className={isImage ? 'attachment-preview image' : 'attachment-preview document'} key={item.id}>
-            {isImage ? (
-              item.preview_url ? <img src={item.preview_url} alt={item.filename} /> : <ImagePlus size={22} />
-            ) : (
-              <FileText size={18} />
-            )}
-            {!isImage && <span>{item.filename}</span>}
-            {!isImage && <small>{item.type || uploadTypeFromContentType(item.content_type)}</small>}
-            <button type="button" aria-label={`移除 ${item.filename}`} onClick={() => removeAttachment(item.id)}>
-              <X size={13} />
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ImagePlus({ size = 16 }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7" />
-      <line x1="16" y1="5" x2="22" y2="5" />
-      <line x1="19" y1="2" x2="19" y2="8" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-    </svg>
-  );
-}
-
-function SquarePen({ size = 16 }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-    </svg>
-  );
-}
-
-function VariableBar({ variables, values, onChange }) {
-  return (
-    <div className="chat-variable-bar">
-      {variables.map((variable) => (
-        <label key={variable.key}>
-          {variable.label || variable.key}
-          {variable.type === 'boolean' ? (
-            <select
-              value={String(values[variable.key] ?? variable.default_value ?? false)}
-              onChange={(e) => onChange(variable.key, e.target.value === 'true')}
-            >
-              <option value="false">false</option>
-              <option value="true">true</option>
-            </select>
-          ) : (
-            <input
-              type={variable.type === 'number' ? 'number' : 'text'}
-              value={values[variable.key] ?? variable.default_value ?? ''}
-              onChange={(e) => onChange(variable.key, e.target.value)}
-            />
-          )}
-        </label>
-      ))}
-    </div>
-  );
-}
-
-function X({ size = 16 }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M18 6 6 18" />
-      <path d="m6 6 12 12" />
-    </svg>
-  );
-}
 
 
