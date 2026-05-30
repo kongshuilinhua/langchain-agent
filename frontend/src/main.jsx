@@ -1809,6 +1809,7 @@ function HomeView(props) {
             setProfileError={setProfileError}
             token={token}
             uploadingKnowledgeFile={uploadingKnowledgeFile}
+            uploadingFileName={uploadingFileName}
             uploadDocument={uploadDocument}
             uploadKnowledgeFile={uploadKnowledgeFile}
             loadDocuments={loadDocuments}
@@ -2216,6 +2217,7 @@ function KnowledgeHome({
   setDocForm,
   setProfileError,
   uploadingKnowledgeFile,
+  uploadingFileName,
   uploadDocument,
   uploadKnowledgeFile,
   token,
