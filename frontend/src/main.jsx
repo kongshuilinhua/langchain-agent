@@ -968,12 +968,31 @@ function App() {
     setFeedbackByMessage((items) => ({ ...items, [messageId]: data.feedback.rating }));
   }
 
+  const chatModeRef = useRef(chatMode);
+  useEffect(() => {
+    chatModeRef.current = chatMode;
+  }, [chatMode]);
+
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+
+  // Clean chat state when switching between draft debugging and published preview
+  useEffect(() => {
+    setMessages([]);
+    setSources([]);
+    setToolDebugEvents([]);
+    setActiveSessionId(null);
+    setError('');
+  }, [chatMode]);
+
   async function sendMessage(event, explicitText) {
     event?.preventDefault();
     const text = (explicitText ?? draft ?? homePrompt).trim();
     const outgoingAttachments = chatAttachments;
     if ((!text && !outgoingAttachments.length) || !activeAgentId || busy) return;
-    if (view !== 'builder' && (!activeSummary || activeSummary.status !== 'published' || !activeSummary.published_version_id)) {
+    if (viewRef.current !== 'builder' && (!activeSummary || activeSummary.status !== 'published' || !activeSummary.published_version_id)) {
       const firstPublished = chatAgents[0];
       if (firstPublished) {
         setActiveAgentId(firstPublished.id);
@@ -981,7 +1000,7 @@ function App() {
       setError('对话只能使用已经过审核并上架的智能体。');
       return;
     }
-    const currentModel = view === 'builder' ? selectedDraftModel : activeAgent?.user_model_config || activeAgent?.model_config || null;
+    const currentModel = viewRef.current === 'builder' ? selectedDraftModel : activeAgent?.user_model_config || activeAgent?.model_config || null;
     const modelWarning = modelCapabilityWarning(currentModel, outgoingAttachments);
     if (modelWarning) {
       setError(modelWarning);
@@ -1007,7 +1026,7 @@ function App() {
         body: JSON.stringify({
           message: text || '请分析附件内容。',
           session_id: activeSessionId || null,
-          mode: view === 'builder' ? chatMode : 'published',
+          mode: viewRef.current === 'builder' ? chatModeRef.current : 'published',
           rag_enabled: effectiveRagEnabled,
           rag_options: agentForm.rag || undefined,
           thinking_enabled: effectiveThinkingEnabled,
