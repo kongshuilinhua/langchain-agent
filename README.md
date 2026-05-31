@@ -106,7 +106,9 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + PostgreSQL
 | LLM 网关 | OpenAI 兼容接口 | DashScope / DeepSeek / 自定义 |
 | Embedding | OpenAI 兼容接口 | 默认 `text-embedding-v4` |
 | Rerank | OpenAI 兼容接口 | 默认 `qwen3-rerank` |
-| 文档解析 | python-docx / PyPDF / csv / markdown | 多格式知识文件 |
+| 中文分词 | jieba | BM25 检索的中文分词 |
+| BM25 检索 | rank-bm25 | 关键词稀疏检索，与 Dense 互补 |
+| 文档解析 | PyPDF / stdlib (zipfile+xml) | PDF + DOCX，纯 Python 无额外依赖 |
 | 网络搜索 | DuckDuckGo HTML | 可选，`WEB_SEARCH_ENABLED` 开关 |
 | 测试 | PyTest | 单元测试 + 集成测试 + RAG 评测 |
 | 容器化 | Dockerfile.api + docker-compose.yml | 一键部署 |
@@ -184,13 +186,13 @@ API_KEY_ENCRYPTION_KEY=          # 可选，用于加密存储用户 API Key
 # 数据库
 DATABASE_URL=postgresql+psycopg2://lingshu:lingshu@192.168.150.101:5433/lingshu_agent
 
-# LLM 网关
+# LLM 网关（三选一即可，优先使用 DASHSCOPE_API_KEY）
 OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 DASHSCOPE_API_KEY=
 OPENAI_MODEL=qwen-plus
 OPENAI_EMBEDDING_MODEL=text-embedding-v4
 
-# DeepSeek（可选，独立 base_url + api_key）
+# DeepSeek（可选）
 DEEPSEEK_API_KEY=
 DEEPSEEK_MODEL=deepseek-chat
 
