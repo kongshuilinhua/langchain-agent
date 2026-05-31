@@ -127,6 +127,7 @@ class ChatRequest(BaseModel):
     search_enabled: bool | None = None
     variables: dict[str, str | int | float | bool | None] = {}
     attachments: list[dict] = []
+    is_debug: bool = False
 
 
 class ToolRequest(BaseModel):
@@ -277,3 +278,6 @@ class InviteAcceptRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     rating: str = Field(pattern="^(positive|negative|none)$")
     comment: str = ""
+
+# Ensure Pydantic models are fully defined (required for Pydantic 2.x)
+ChatRequest.model_rebuild()
