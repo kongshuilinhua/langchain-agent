@@ -315,6 +315,14 @@ def _run_compat_migrations() -> None:
             },
         )
 
+    if "sessions" in table_names:
+        _ensure_columns(
+            "sessions",
+            {
+                "is_debug": "BOOLEAN DEFAULT false",
+            },
+        )
+
 
 def get_db():
     db = SessionLocal()

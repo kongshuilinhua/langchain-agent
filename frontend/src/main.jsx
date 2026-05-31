@@ -819,7 +819,7 @@ function App() {
     if (!body.name) {
       throw new Error('知识库名称不能为空。');
     }
-    const data = await api(`/api/knowledge-bases/${kbId}`, { token, method: 'PUT', body });
+    const data = await api(`/api/knowledge-bases/${kbId}`, { token, method: 'PATCH', body });
     await bootstrap();
     return data.knowledge_base;
   }
@@ -1036,7 +1036,8 @@ function App() {
     setHomePrompt('');
     setBusy(true);
     setError('');
-    setMessages((items) => [...items, { role: 'user', content: text }, { role: 'assistant', content: '', pending: true }]);
+    setChatAttachments([]);
+    setMessages((items) => [...items, { role: 'user', content: text, attachments: outgoingAttachments }, { role: 'assistant', content: '', pending: true }]);
     setToolDebugEvents([]);
     try {
       const response = await fetch(`${API_BASE}/api/agents/${activeAgentId}/chat/stream`, {
@@ -1046,6 +1047,7 @@ function App() {
           message: text || '请分析附件内容。',
           session_id: activeSessionId || null,
           mode: viewRef.current === 'builder' ? chatModeRef.current : 'published',
+          is_debug: viewRef.current === 'builder',
           rag_enabled: effectiveRagEnabled,
           rag_options: agentForm.rag || undefined,
           thinking_enabled: effectiveThinkingEnabled,

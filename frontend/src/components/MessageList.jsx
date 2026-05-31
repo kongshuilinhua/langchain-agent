@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import { ThumbsUp, ThumbsDown, FileText, Search } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, FileText, Search, ImagePlus } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar.jsx';
 
 export function MessageList({ messages, feedbackByMessage = {}, submitFeedback = () => {}, avatar = 'AI' }) {
@@ -22,7 +22,22 @@ export function MessageList({ messages, feedbackByMessage = {}, submitFeedback =
               <div className={message.error ? 'message-error' : ''}>
                 {message.pending && !message.content ? <p className="message-pending">思考中...</p> : <MarkdownContent content={message.content || ''} />}
               </div>
-            ) : <p>{message.content}</p>}
+            ) : <>
+              <p>{message.content}</p>
+              {message.attachments?.length > 0 && (
+                <div className="message-attachments">
+                  {message.attachments.map((att) => (
+                    <div key={att.id} className={att.kind === 'image' || att.type === 'image' ? 'message-attachment-image' : 'message-attachment-document'}>
+                      {att.kind === 'image' || att.type === 'image' ? (
+                        <img src={att.data_url || att.preview_url} alt={att.filename} />
+                      ) : (
+                        <span className="message-attachment-file"><FileText size={14} />{att.filename}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>}
             {message.role === 'assistant' && message.id && (
               <div className="feedback-actions">
                 <button

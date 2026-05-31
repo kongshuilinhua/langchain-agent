@@ -51,3 +51,13 @@ Thumbs.db
 # 文档目录（不上传）
 docs/
 doc/
+
+# 项目元文件（不上传）
+CLAUDE.md
+CHANGELOG.md
+CONTRIBUTING.md
+.superpowers/
+
+# 备份文件
+*.bak
+test_*.py

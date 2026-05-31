@@ -632,7 +632,8 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 .agent-card > span img,
 .agent-avatar img,
 .bot-avatar img,
-.agent-avatar-preview img {
+.agent-avatar-preview img,
+.welcome-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -2890,6 +2891,30 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
   line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.message-attachment-image img {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 10px;
+  border: 1px solid #e4e7ec;
+  object-fit: cover;
+  display: block;
+}
+.message-attachment-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #f2f4f7;
+  font-size: 13px;
+  color: #475467;
 }
 .markdown-content {
   display: grid;

@@ -448,16 +448,24 @@ class WorkflowRunner:
         tool_text = "\n".join(f"- {item['tool']}: {item['content']}" for item in context.get("tool_outputs", []))
         variable_text = "\n".join(f"- {key}: {value}" for key, value in context.get("variables", {}).items())
         attachment_text = self._attachment_text(context.get("uploads", []))
+        thinking_blocks = []
+        thinking_msgs = self._thinking_messages(context)
+        if thinking_msgs:
+            thinking_blocks = [msg["content"] for msg in thinking_msgs]
+        system_parts = [
+            agent.system_prompt or "你是一个自定义智能体。",
+            *thinking_blocks,
+            f"Web search results for this turn:\n{web_source_text or 'None'}",
+            f"可用知识片段：\n{source_text or '无'}",
+            f"工具输出：\n{tool_text or '无'}",
+            f"用户变量：\n{variable_text or '无'}",
+            f"会话记忆摘要：\n{context.get('memory_summary') or '无'}",
+            f"本轮附件上下文：\n{attachment_text or '无'}",
+            f"Long-term Agent memory:\n{context.get('profile_memory') or 'None'}",
+        ]
+        system_content = "\n\n".join(part for part in system_parts if part.strip())
         return [
-            {"role": "system", "content": agent.system_prompt or "你是一个自定义智能体。"},
-            *self._thinking_messages(context),
-            {"role": "system", "content": f"Web search results for this turn:\n{web_source_text or 'None'}"},
-            {"role": "system", "content": f"可用知识片段：\n{source_text or '无'}"},
-            {"role": "system", "content": f"工具输出：\n{tool_text or '无'}"},
-            {"role": "system", "content": f"用户变量：\n{variable_text or '无'}"},
-            {"role": "system", "content": f"会话记忆摘要：\n{context.get('memory_summary') or '无'}"},
-            {"role": "system", "content": f"本轮附件上下文：\n{attachment_text or '无'}"},
-            {"role": "system", "content": f"Long-term Agent memory:\n{context.get('profile_memory') or 'None'}"},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": self._user_content(context["input"], context.get("uploads", []))},
         ]
 

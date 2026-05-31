@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import secrets
 import time
 from collections.abc import Iterable
 
@@ -13,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel, Field
 from api.deps import get_current_membership, get_current_user, require_manager
 from api.schemas import (
     AgentCreateRequest,
@@ -153,6 +153,11 @@ PUBLIC_CHAT_ERRORS = (
     "当前智能体还没有发布版本",
     "发布版本不存在",
     "mode must be draft or published",
+    "Model call failed",
+    "Model returned an empty answer",
+    "Chat model API key is not configured",
+    "Embedding API key is not configured",
+    "Rerank API key is not configured",
 )
 
 
@@ -189,7 +194,7 @@ def sse_event(event: str, data: dict) -> str:
 def safe_stream_error(exc: Exception) -> dict:
     message = str(exc)
     if any(public_error in message for public_error in PUBLIC_CHAT_ERRORS):
-        return {"message": message, "error_code": _error_code(message)}
+        return {"message": _sanitize_public_error(message), "error_code": _error_code(message)}
     return {
         "message": "智能体运行失败，请检查模型、知识库或附件配置后重试。",
         "error_code": _error_code(message),
@@ -285,8 +290,8 @@ def health():
                 "base_url": embedding_base,
                 "mock": embedding_mock,
                 "configured": bool(embedding_model and embedding_api_key),
-                "available": bool(embedding_model and embedding_api_key and not embedding_mock and vector_status["available"]),
-                "reason": None if bool(embedding_model and embedding_api_key and not embedding_mock and vector_status["available"]) else _runtime_unavailable_reason(embedding_probe, vector_status),
+                "available": bool(embedding_model and embedding_api_key and not embedding_mock),
+                "reason": None if bool(embedding_model and embedding_api_key and not embedding_mock) else _runtime_unavailable_reason(embedding_probe, vector_status),
                 "probe": embedding_probe,
             },
             "web_search": {
@@ -1072,7 +1077,7 @@ def delete_kb(kb_id: int, membership: WorkspaceMember = Depends(get_current_memb
     return {"deleted": True}
 
 
-@app.put("/api/knowledge-bases/{kb_id}")
+@app.patch("/api/knowledge-bases/{kb_id}")
 def update_kb(kb_id: int, request: KnowledgeBaseCreateRequest, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
     kb = require_workspace_kb(db, membership.workspace_id, kb_id)
     require_kb_write_access(kb, membership)
@@ -1096,7 +1101,7 @@ def get_document_chunks(kb_id: int, document_id: int, membership: WorkspaceMembe
     return {"document": document_payload(document, len(chunks)), "chunks": chunks}
 
 
-from pydantic import BaseModel
+# Duplicate ChatRequest definition removed; model defined in api.schemas.
 
 class ResegmentRequest(BaseModel):
     parse_mode: str = "precise"
@@ -1231,7 +1236,11 @@ def chat_stream(agent_id: int, request: ChatRequest, membership: WorkspaceMember
 def list_agent_sessions(agent_id: int, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
     agent = require_workspace_agent(db, membership.workspace_id, agent_id)
     require_agent_read_access(agent, membership)
-    query = db.query(ChatSession).filter(ChatSession.workspace_id == membership.workspace_id, ChatSession.agent_id == agent.id)
+    query = db.query(ChatSession).filter(
+        ChatSession.workspace_id == membership.workspace_id,
+        ChatSession.agent_id == agent.id,
+        ChatSession.is_debug == False,
+    )
     if not can_manage(membership.role):
         query = query.filter(ChatSession.user_id == membership.user_id)
     sessions = query.order_by(ChatSession.updated_at.desc()).all()
@@ -1290,7 +1299,7 @@ def delete_session(session_id: int, membership: WorkspaceMember = Depends(get_cu
 def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatRequest) -> Iterable[str]:
     run = None
     try:
-        session = get_or_create_session(db, agent, user_id, request.session_id, request.message)
+        session = get_or_create_session(db, agent, user_id, request.session_id, request.message, is_debug=getattr(request, "is_debug", False))
         user_message = Message(session_id=session.id, role="user", content=request.message, sources=[])
         db.add(user_message)
         db.commit()
@@ -1544,12 +1553,18 @@ def apply_model_selection(db: Session, payload: dict, *, user_id: int) -> dict:
     return payload
 
 
-def get_or_create_session(db: Session, agent: Agent, user_id: int, session_id: int | None, title_seed: str) -> ChatSession:
+def get_or_create_session(db: Session, agent: Agent, user_id: int, session_id: int | None, title_seed: str, is_debug: bool = False) -> ChatSession:
     if session_id:
         session = db.get(ChatSession, session_id)
         if session and session.agent_id == agent.id and session.user_id == user_id:
             return session
-    session = ChatSession(workspace_id=agent.workspace_id, agent_id=agent.id, user_id=user_id, title=title_seed[:60] or "新对话")
+    session = ChatSession(
+        workspace_id=agent.workspace_id,
+        agent_id=agent.id,
+        user_id=user_id,
+        title=title_seed[:60] or "新对话",
+        is_debug=is_debug,
+    )
     db.add(session)
     db.commit()
     db.refresh(session)

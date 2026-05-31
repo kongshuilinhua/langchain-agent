@@ -280,4 +280,5 @@ class FeedbackRequest(BaseModel):
     comment: str = ""
 
 # Ensure Pydantic models are fully defined (required for Pydantic 2.x)
-ChatRequest.model_rebuild()
+
+

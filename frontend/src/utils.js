@@ -512,7 +512,7 @@ function getRagRuntime(status) {
   const vector = status?.dependencies?.vector_store || {};
   const model = String(embedding.model || '').trim();
   const reason = embedding.reason || vector.error || (status?.status === 'offline' ? 'health_unavailable' : '');
-  const available = Boolean((embedding.available ?? embedding.configured) && !embedding.mock && (vector.available ?? true));
+  const available = Boolean((embedding.available ?? embedding.configured) && !embedding.mock && (vector.available || vector.fallback));
   return {
     available,
     model: model || '后端默认 Embedding',

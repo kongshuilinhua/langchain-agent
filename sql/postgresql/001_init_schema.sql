@@ -1,4 +1,4 @@
-﻿-- Lingshu Agent complete PostgreSQL schema.
+-- Lingshu Agent complete PostgreSQL schema.
 -- Source of truth: docs/storage-design.md, docs/api-design.md,
 -- docs/product-requirements.md, and docs/agent-capability-plan.md.
 --
@@ -301,6 +301,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_id BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL REFERENCES users(id),
     title VARCHAR(200) NOT NULL DEFAULT 'New conversation',
+    is_debug BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

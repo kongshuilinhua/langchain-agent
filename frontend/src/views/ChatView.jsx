@@ -12,6 +12,7 @@ import {
   Send
 } from 'lucide-react';
 import { MessageList } from '../components/MessageList.jsx';
+import { AgentAvatar } from '../components/AgentAvatar.jsx';
 import {
   reasoningCapabilityForModel,
   thinkingStatusText,
@@ -101,7 +102,7 @@ export function ChatView({
     <>
       <header className="chat-topbar">
         <div className="agent-select">
-          <span className="agent-avatar">{activeSummary?.avatar || activeAgent?.avatar || 'AI'}</span>
+          <AgentAvatar value={activeSummary?.avatar || activeAgent?.avatar || 'AI'} />
           <select
             value={chatAgents.some((agent) => agent.id === activeAgentId) ? activeAgentId : ''}
             onChange={(e) => setActiveAgentId(Number(e.target.value))}
@@ -214,13 +215,13 @@ function ChatHomeV2({
       <div className="conversation">
         {!hasChatAgent ? (
           <section className="welcome-panel">
-            <span className="welcome-avatar">AI</span>
+            <AgentAvatar value="AI" className="welcome-avatar" />
             <h1>{CHAT_COPY.noAgentTitle}</h1>
             <p>{CHAT_COPY.noAgentDesc}</p>
           </section>
         ) : !conversationStarted ? (
           <section className="welcome-panel">
-            <span className="welcome-avatar">{activeAgent?.avatar || agentForm.avatar || 'AI'}</span>
+            <AgentAvatar value={activeAgent?.avatar || agentForm.avatar || 'AI'} className="welcome-avatar" />
             <h1>{CHAT_COPY.welcomeTitle}</h1>
             <p>{activeAgent?.description || agentForm.description || CHAT_COPY.welcomeDesc}</p>
             <div className="quick-prompts">
