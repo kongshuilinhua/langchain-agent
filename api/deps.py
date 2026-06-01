@@ -11,6 +11,22 @@ def get_current_user(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> User:
+    """
+    FastAPI 统一会话令牌校验与用户主体注入器（全平台 API 的“第一道安全护城河”）。
+
+    🎯 意图与工程大局观：
+        负责拦截进入系统的每一个受保护 HTTP 请求，解析 Authorization 请求头，
+        对 Bearer 令牌实施高强度物理鉴权与完整性指纹解密，并最终返回数据库对应的 `User` 实体，
+        为下游的租户路由提供了绝对一致的用户上下文环境。
+
+    🛡️ 防御性编程与大模型兜底：
+        - 从源头上验证 Bearer Token 语法格式。
+        - 用 try-catch 全面包围 JWT 签名解密（`decode_access_token`），
+          防止由于签名过期、被恶意撞库篡改、非法的密钥碰撞等情况导致底层 Crash。
+          凡有任何解密异常，一致平滑转换为标准的 `HTTP_401_UNAUTHORIZED` 异常抛出。
+        - 在数据库取回 `User` 实体后，强力验证其 `is_active` 状态，
+          确保已被管理员注销或拉黑的恶意账户在首帧就被强行切断，无法接触平台资产。
+    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
@@ -29,6 +45,15 @@ def get_current_membership(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> WorkspaceMember:
+    """
+    多租户隔离层：当前工作区成员身份的动态解析与安全认证器。
+
+    🎯 意图与工程大局观：
+        本系统采用多租户隔离架构。用户的任何智能体、知识库资产全部归属于特定的 `Workspace`（工作区）。
+        即使一个用户的 Bearer 令牌有效（401 校验通过），但如果他在当前工作区没有合法的 WorkspaceMember 记录，
+        依旧绝对无法访问任何平台数据。
+        本注入器用于动态拦截多租户水平越权攻击，守护租户数据绝对隐私。
+    """
     membership = (
         db.query(WorkspaceMember)
         .filter(WorkspaceMember.user_id == current_user.id)
@@ -41,6 +66,15 @@ def get_current_membership(
 
 
 def require_manager(membership: WorkspaceMember = Depends(get_current_membership)) -> WorkspaceMember:
+    """
+    细粒度 RBAC 权限守门人：强制校验超级管理员 / 经理等高级资产管理角色。
+
+    🎯 意图与工程大局观：
+        专用于模型发布、全系统内置工具清洗、多租户 Workspace 自举创建等具备全局毁灭性破坏力的管理 API。
+        通过级联依赖注入（Depends）链条：
+        `get_current_user` (身份校验) -> `get_current_membership` (租户物理隔离) -> `require_manager` (管理权能校验)，
+        用极简、声明式的工程化 API 代码逻辑，封堵了越权提权的任何通道。
+    """
     if not can_manage(membership.role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     return membership

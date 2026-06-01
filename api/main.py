@@ -180,6 +180,15 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup() -> None:
+    """
+    FastAPI 全局服务启动钩子（System Lifecycle Boot Sentinel）。
+
+    🎯 意图与工程大局观：
+        负责在 Web 服务对外开放监听前，进行底层的数据库 DDL 运行时自适应迁移（init_db）。
+        设计了“平滑降级自愈启动”机制（degraded mode）：
+        如果底层数据库连接暂时失败或连接超时，系统不会发生硬崩溃阻断进程，而是将异常信息捕获到全局 `startup_error` 中，
+        允许 FastAPI 依旧成功拉起并暴露出 `/api/health` 监控状态，极大方便了云原生 K8s 环境下的就绪探测（Readiness Probe）。
+    """
     global startup_error
     if settings.jwt_secret == "change-me-in-production":
         logger.warning(
@@ -199,6 +208,17 @@ def sse_event(event: str, data: dict) -> str:
 
 
 def safe_stream_error(exc: Exception) -> dict:
+    """
+    🛡️ 防御性编程与隐私安全红线（SSE 流式异常净化拦截器）。
+
+    🎯 意图与工程大局观：
+        在 SSE 长连接流式传输中，如果智能体由于第三方接口网络抖动、密钥无效或配置越权等原因中断，
+        我们不能直接将底层数据库 Traceback 或外部大模型服务商返回的原生 Error 字符串推给 C 端，
+        因为这会暴露服务器架构，甚至泄漏用户的 API 密钥（Privacy Leak）。
+        本方法建立了两道隐私泄露防火墙：
+        1. 建立 `PUBLIC_CHAT_ERRORS` 白名单：只有处于白名单的业务级安全异常（如附件格式不支持）才允许净化后直接透传。
+        2. 全局清洗脱敏：调用 `_sanitize_public_error` 强制利用正则将一切看似密钥的文本剔除，其余未知异常一律转译为模糊安全的引导文案。
+    """
     message = str(exc)
     if any(public_error in message for public_error in PUBLIC_CHAT_ERRORS):
         return {"message": _sanitize_public_error(message), "error_code": _error_code(message)}
@@ -209,6 +229,10 @@ def safe_stream_error(exc: Exception) -> dict:
 
 
 def _error_code(message: str) -> str:
+    """
+    动态错误指纹聚类器（Classification Gateway）。
+    通过对异常语意正则过滤，将其规整映射为前端能够做特定交互降级的强类型错误编码（如 tool_error, secret_config_error）。
+    """
     normalized = re.sub(r"[^a-z0-9]+", "_", message.lower()).strip("_")
     if "model_call_failed" in normalized or "gateway" in normalized:
         return "model_provider_error"
@@ -227,6 +251,15 @@ def _error_code(message: str) -> str:
 
 @app.get("/api/health")
 def health():
+    """
+    系统就绪度与依赖健康性自检大盘（Unified Health & Observability Gateway）。
+
+    🎯 意图与工程大局观：
+        为 K8s / 负载均衡探针和开发人员提供平台连接性的全方位透视。
+        - 即使 Milvus 挂掉，由于内置了平滑降级（Graceful Degradation）的 Memory 检索备用机制，RAG 服务不至于彻底崩溃，因此系统健康度只会报 warning 而非 Crash。
+        - 运用 `_health_probe_cache` 机制，对大模型和向量化 Embedding 的网络连通性探测设置 300 秒（5分钟）的冷缓存（Cooldown），
+          防止过于频繁的健康监测探针高频呼叫第三方大模型 API，消耗不必要的 Token 费用和引发 API 限频限制。
+    """
     provider = OpenAICompatibleProvider()
     chat_api_key = provider._api_key(settings, purpose="chat")
     embedding_api_key = provider._api_key(settings, purpose="embedding")
@@ -1233,6 +1266,15 @@ def update_workflow(agent_id: int, request: WorkflowUpdateRequest, membership: W
 
 @app.post("/api/agents/{agent_id}/chat/stream")
 def chat_stream(agent_id: int, request: ChatRequest, membership: WorkspaceMember = Depends(get_current_membership), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    智能体流式对话核心中继网关（SSE Long-Connection Gateway）。
+
+    🎯 意图与工程大局观：
+        这是用户与 Agent 交互最频繁的顶级流量入口。
+        本接口不返回传统的常规 JSON 大文本响应，而是返回一个 `StreamingResponse`。
+        它基于标准的 `text/event-stream` 格式，与底层的 `stream_chat_events` 异步生成器绑定，
+        保持与浏览器客户端的 HTTP 长连接，以毫秒级时延将计算状态、工具痕迹、以及 Token 逐字推送给用户，提供极致交互性能。
+    """
     print(f"[DEBUG CHAT] agent_id: {agent_id} | mode: {request.mode} | session_id: {request.session_id}")
     agent = require_workspace_agent(db, membership.workspace_id, agent_id)
     require_agent_read_access(agent, membership)
@@ -1304,6 +1346,19 @@ def delete_session(session_id: int, membership: WorkspaceMember = Depends(get_cu
 
 
 def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatRequest) -> Iterable[str]:
+    """
+    智能体长会话事件编译器（SSE Event Stream Compiler）。
+
+    🎯 意图与工程大局观：
+        连接 WorkflowRunner 的低级图节点生成器与上层的 FastAPI Streaming HTTP。
+        - 自动接水管：实时消费 Runner 吐出的每一个 token，翻译成 `event: token` SSE 标准包推进 TCP 缓冲区。
+        - 终点收官：当大模型完全说出答案后，自动捕获 `complete` 终帧包，将最终的 `assistant` 回答保存到关系型数据库（Message 表）以积累历史聊天。
+    
+    🛡️ 防御性编程与大模型兜底：
+        - 强韧的连接容错：如果模型调用超时、用户强制取消连接或者外部 API 崩溃，触发 `except Exception` 拦截。
+          将当前 Run 实例状态置为 `failed` 标志并计算运行耗时写入数据库，强力保障运行链路即使崩溃也是“合规地记录了失败状态”，
+          最后以 `event: error` 将脱敏后的错误抛给前端，防止连接无声卡死或发生物理挂死。
+    """
     run = None
     try:
         session = get_or_create_session(db, agent, user_id, request.session_id, request.message, is_debug=getattr(request, "is_debug", False))
@@ -1515,6 +1570,15 @@ def validate_workflow_nodes(nodes: list[dict]) -> None:
 
 
 def apply_model_selection(db: Session, payload: dict, *, user_id: int) -> dict:
+    """
+    智能体模型解析与默认温度绑定处理器（Multi-Tenant Model Selector）。
+
+    🎯 意图与工程大局观：
+        本函数解决智能体配置在“公共租户默认模型”与“私有 BYOK (Bring-Your-Own-Key) 模型”之间的自适应解析与路由映射。
+        - 优先读取 `user_model_config_id`：若用户绑定了私有 BYOK 模型，强力阻断非其名下的私有模型（安全校验），并强行抽取其 `chat_model` 对齐 API 调用名。
+        - 如果两者均未指定，自适应获取用户名下的“全局默认私有模型”（UserModelConfig 标记为 is_default）。
+        - 平滑温度兜底：若温度 `temperature` 未提供，自动拉取该选定大模型的 `default_temperature`（通常是确定性表现优异的 0.4）做静默覆盖，保证大模型产出处于安全稳定性红线上。
+    """
     if payload.get("user_model_config_id"):
         config = db.query(UserModelConfig).filter(
             UserModelConfig.id == payload["user_model_config_id"],
