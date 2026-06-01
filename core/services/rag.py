@@ -16,20 +16,26 @@ from core.integrations.llm import OpenAICompatibleProvider
 from core.integrations import vector_store as vector_store_module
 from core.services.rag_cache import redis_store
 
-
+# 🧠 魔鬼数字：BM25 构建分批批次大小，防止全表读取导致的高内存开销与游标挂起
 BM25_BATCH_SIZE = 1000
 
 import threading
 
-# Thread-safe global cache for compiled BM25 indices
-# Key: (frozenset(knowledge_base_ids), version_hash) -> Value: (compiled_bm25_index, rows_data)
+# 🎯 线程安全的全局内存缓存（BM25 索引热加载缓存器）
+# 物理哈希格式 Key: (frozenset(knowledge_base_ids), version_hash) -> Value: (compiled_bm25_index, rows_data)
+# 意图说明：
+# BM25 计算在大文档量时极其昂贵。我们在内存缓存已编译好的 BM25Index。
+# 利用 `version_hash`（由知识库中所有文档的最后修改时间 + 数量组合而成）作为缓存键的一部分，
+# 一旦有文档增删改，哈希自然改变，旧缓存失效，新索引自动懒构建，实现开箱即用的近实时“实时索引更新”。
 _BM25_INDEX_CACHE = {}
 _BM25_CACHE_LOCK = threading.Lock()
 
 
-
 @dataclass
 class RagResult:
+    """
+    RAG 混合检索出的最终融合包体。
+    """
     sources: list[dict]
     status: dict
 
@@ -43,12 +49,27 @@ def retrieve(
     config: dict,
     runtime_config: dict | None = None,
 ) -> RagResult:
+    """
+    RAG 混合检索编排核心（Retrieval Orchestrator）。
+
+    🎯 意图与工程大局观：
+        本方法是整个平台检索增强生成的核心。
+        检索流水线设计如下：
+        1. 租户隔离检测与前置 Redis 缓存嗅探（若命中则直接返回）。
+        2. 发起向量化 Dense Search（稠密向量相似度检索）以获取语义近似碎片。
+        3. 发起本地 BM25 Search（倒排词频检索）以获取精准术语匹配。
+        4. 使用互惠排名融合（RRF, Reciprocal Rank Fusion）抹平两个不同算分模型的量纲，生成全局排序。
+        5. 调用深度语义 Rerank 重排模型（若启用）重新评估 Query 与 Document 的相关度。
+        6. 进行“证据度校验（_has_evidence）”判定是否命中真实证据，防止无关闲聊被强制套上知识库导致幻觉。
+        7. 回写 Redis 缓存，输出最终 Sources 片段。
+    """
     settings = get_settings()
     started_status = _base_status(query, knowledge_base_ids, config)
     if not knowledge_base_ids:
         started_status.update({"reason": "no_knowledge_base", "no_evidence": True})
         return RagResult([], started_status)
 
+    # 🎯 缓存防雪崩与击穿：使用结合了 Query、Config 和文档最后修改时间戳的版本化 `cache_key`
     cache_key = _cache_key(db, workspace_id=workspace_id, knowledge_base_ids=knowledge_base_ids, query=query, config=config)
     if config.get("cache_enabled", True):
         cached = redis_store.get_json(cache_key)
@@ -57,6 +78,7 @@ def retrieve(
             status.update({"cache": {"enabled": True, "hit": True, "backend": cached.backend}})
             return RagResult(cached.value.get("sources", []), status)
 
+    # 1. 稠密向量搜索通道 (Dense Channel)
     provider = OpenAICompatibleProvider()
     query_vector = provider.embed(query, runtime_config=runtime_config)
     dense_hits = _dense_search(
@@ -65,6 +87,8 @@ def retrieve(
         query_vector=query_vector,
         limit=int(config.get("dense_top_k") or settings.rag_dense_top_k),
     )
+    
+    # 2. 稀疏文本搜索通道 (Sparse BM25 Channel)
     bm25_hits = _bm25_search(
         db,
         workspace_id=workspace_id,
@@ -72,7 +96,13 @@ def retrieve(
         query=query,
         limit=int(config.get("bm25_top_k") or settings.rag_bm25_top_k),
     )
+    
+    # 3. 多路互惠排名融合 (Reciprocal Rank Fusion)
     fused_hits = _rrf(dense_hits, bm25_hits, k=int(config.get("rrf_k") or settings.rag_rrf_k))
+    
+    # 4. 精准语义重排 (Rerank Phase)
+    # 🛡️ 容错设计：Rerank 通常涉及第三方外接服务（可能遭遇并发率受限或超时崩溃），
+    # 在 try-catch 中进行包裹，一旦 Rerank 出错，降级到直接输出 RRF 融合排序，决不让 Rerank 异常拖垮主流程。
     rerank_applied = False
     rerank_error = ""
     final_hits = fused_hits
@@ -90,9 +120,11 @@ def retrieve(
             rerank_error = str(exc)[:240]
             final_hits = fused_hits
 
+    # 5. 组装输出与有效证据评估
     top_k = int(config.get("top_k") or settings.rag_top_k)
     sources = [_source_payload(hit) for hit in final_hits[:top_k]]
     no_evidence = not _has_evidence(sources, query)
+    
     status = started_status | {
         "reason": "available" if sources else "no_match",
         "matched_chunks": len(final_hits),
@@ -111,12 +143,15 @@ def retrieve(
         "refuse_when_no_evidence": bool(config.get("refuse_when_no_evidence", settings.rag_refuse_when_no_evidence)),
         "rag_model": "environment",
     }
+    
+    # 6. 回写 Redis
     if config.get("cache_enabled", True):
         redis_store.set_json(cache_key, {"sources": sources, "status": status}, settings.rag_cache_ttl_seconds)
     return RagResult(sources, status)
 
 
 def _base_status(query: str, knowledge_base_ids: list[int], config: dict) -> dict:
+    """初始化 RAG trace 状态结构。"""
     settings = get_settings()
     return {
         "enabled": True,
@@ -130,6 +165,9 @@ def _base_status(query: str, knowledge_base_ids: list[int], config: dict) -> dic
 
 
 def _dense_search(*, workspace_id: int, knowledge_base_ids: list[int], query_vector: list[float], limit: int) -> list[dict]:
+    """
+    向量稠密检索。
+    """
     hits = []
     for kb_id in knowledge_base_ids:
         for hit in vector_store_module.vector_store.search(
@@ -153,7 +191,16 @@ def _dense_search(*, workspace_id: int, knowledge_base_ids: list[int], query_vec
 
 
 def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int], query: str, limit: int) -> list[dict]:
-    # Calculate the exact version hash representing the state of all KBs
+    """
+    内存倒排 BM25 检索核心（支持自适应自举编译索引）。
+
+    ⚡ 边界与性能思考（大内存优化策略）：
+        - 对大规模数据库分块记录，如果直接一次性 `.all()` 调入，会造成严重的物理内存暴涨以及 SQLAlchemy 对象跟踪开销。
+        - 采取批处理分片读取机制（`offset().limit()`），分批提取，并配以 `db.expire_all()`。
+          `db.expire_all()` 极其关键，它用于主动释放 SQLAlchemy 内部的 Session 一级实体缓存，防止读入十万级分块直接耗尽 JVM/Python 堆内存。
+        - 对分词操作，优先使用高性能结巴（`jieba`）库进行中文精确分词；若缺失结巴环境，自动防御退化为正则表达式匹配非空 Unicode 汉字和单词列表。
+    """
+    # 🎯 生成版本控制特征指纹：检查关联知识库内所有文件的个数和最大修改时间戳
     stats = (
         db.query(
             KnowledgeDocument.knowledge_base_id,
@@ -169,14 +216,14 @@ def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int
     
     cache_key = (frozenset(knowledge_base_ids), version)
     
-    # Try fetching from global memory cache
+    # 🎯 线程安全的缓存拉取：防止并发访问临界区引起死锁或缓存状态错乱
     with _BM25_CACHE_LOCK:
         cached_data = _BM25_INDEX_CACHE.get(cache_key)
         
     if cached_data:
         bm25_index, rows_data = cached_data
     else:
-        # Retrieve all chunks and build index
+        # 未命中缓存，开始懒编译 BM25 索引
         query_chunks = (
             db.query(KnowledgeChunk)
             .filter(
@@ -191,6 +238,7 @@ def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int
         rows_data = []
         tokenized_corpus = []
         
+        # ⚡ 深度内存节约：批式分片检索与垃圾主动回收
         for offset in range(0, total_count, BM25_BATCH_SIZE):
             batch = query_chunks.order_by(KnowledgeChunk.id.asc()).offset(offset).limit(BM25_BATCH_SIZE).all()
             for row in batch:
@@ -206,25 +254,25 @@ def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int
                     "metadata": _row_metadata(row),
                     "tokens": tokens
                 })
+            # ⚡ 释放会话状态，阻断内存溢出
             db.expire_all()
             
-        # Compile the BM25 index
+        # 编译倒排表索引
         try:
             from rank_bm25 import BM25Okapi
             bm25_index = BM25Okapi(tokenized_corpus)
         except Exception:
             bm25_index = None
             
-        # Store compiled index in the global memory cache
         with _BM25_CACHE_LOCK:
-            # Evict old cache items to control memory usage
+            # 🛡️ 内存控制策略：缓存长度硬限制 100，超出自动全清空重建，杜绝因知识库数量过多造成的内存虚高
             if len(_BM25_INDEX_CACHE) > 100:
                 _BM25_INDEX_CACHE.clear()
             _BM25_INDEX_CACHE[cache_key] = (bm25_index, rows_data)
     
     tokenized_query = _tokenize(query)
     
-    # Calculate BM25 scores
+    # 计算词频分值
     if bm25_index:
         try:
             scores = [float(s) for s in bm25_index.get_scores(tokenized_query)]
@@ -239,6 +287,7 @@ def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int
     for data, score in zip(rows_data, scores):
         row_tokens = data["tokens"]
         overlap = query_token_set.intersection(row_tokens)
+        # 🛡️ 短路匹配：如果无词频分数且连字面交集也无，跳过，提升最终多通道过滤性能
         if score <= 0 and tokenized_query and not overlap:
             continue
         if score <= 0 and overlap:
@@ -258,6 +307,14 @@ def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int
 
 
 def _rrf(dense_hits: list[dict], bm25_hits: list[dict], *, k: int) -> list[dict]:
+    """
+    互惠排名融合算法 (Reciprocal Rank Fusion)。
+
+    🎯 意图与工程大局观：
+        抹平不同计算模型（例如 Milvus Cosine 相似度为 [-1.0, 1.0]，而 BM25 理论分值为无界正实数 [0, +inf]）的基准尺度。
+        计算公式： RRF_Score = Sum( 1 / (k + rank_channel) )
+        k 默认为 60（业界公认的经验常数最优值），有效防范头部排序结果的轻微排序浮动被无限制放大。
+    """
     combined: dict[str, dict] = {}
     for channel, hits in (("dense", dense_hits), ("bm25", bm25_hits)):
         for rank, hit in enumerate(hits, start=1):
@@ -278,6 +335,9 @@ def _rrf(dense_hits: list[dict], bm25_hits: list[dict], *, k: int) -> list[dict]
 
 
 def _rerank(provider: OpenAICompatibleProvider, *, query: str, hits: list[dict], top_n: int, model: str) -> list[dict]:
+    """
+    Rerank 深度多阶段排序。
+    """
     documents = [hit["text"] for hit in hits]
     ranked = provider.rerank(query, documents, top_n=min(top_n, len(documents)), model=model)
     output = []
@@ -291,11 +351,13 @@ def _rerank(provider: OpenAICompatibleProvider, *, query: str, hits: list[dict],
         hit["score"] = float(item.get("relevance_score", hit.get("score", 0)))
         hit["retrieval_channel"] = "rerank"
         output.append(hit)
+    # 🛡️ 兜底防护：如果有部分未被重排的落选片段，按原序置于队尾，防止在切片时彻底丢失备用上下文
     output.extend(hit for index, hit in enumerate(hits) if index not in used)
     return output
 
 
 def _source_payload(hit: dict) -> dict:
+    """转换召回信息为前端强类型来源字典。"""
     metadata = hit.get("metadata") or {}
     title = metadata.get("title") or metadata.get("filename") or f"document-{metadata.get('document_id', '')}".strip("-")
     return {
@@ -315,6 +377,7 @@ def _source_payload(hit: dict) -> dict:
 
 
 def _row_metadata(row: KnowledgeChunk) -> dict:
+    """打包映射字段。"""
     metadata = dict(row.metadata_ or {})
     metadata.update(
         {
@@ -333,6 +396,7 @@ def _row_metadata(row: KnowledgeChunk) -> dict:
 
 
 def _tokenize(text: str) -> list[str]:
+    """高性能中英文分词器。"""
     try:
         import jieba
 
@@ -342,6 +406,13 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _bm25_scores(corpus: list[list[str]], query_tokens: list[str]) -> list[float]:
+    """
+    防灾退化版原生的 BM25 算分公式（在未安装第三方库时的防御实现）。
+
+    🧠 核心数学常数设计：
+        - k1 = 1.5: 调节词频饱和度（Term Frequency Saturation）。值越大，词频贡献增长越慢。
+        - b = 0.75: 文档长度惩罚系数（Document Length Penalty）。值越大，对超长篇幅文本块的惩罚力度越强。
+    """
     if not corpus or not query_tokens:
         return [0.0 for _ in corpus]
     try:
@@ -363,6 +434,7 @@ def _bm25_scores(corpus: list[list[str]], query_tokens: list[str]) -> list[float
                 freq = doc.count(token)
                 if not freq:
                     continue
+                # 计算标准的 IDF（逆文档频率）分值，附加 0.5 顺滑因子避开零频冲突
                 idf = math.log((doc_count - doc_freq.get(token, 0) + 0.5) / (doc_freq.get(token, 0) + 0.5) + 1)
                 denom = freq + 1.5 * (1 - 0.75 + 0.75 * length / max(avg_len, 1))
                 score += idf * (freq * 2.5 / denom)
@@ -370,6 +442,8 @@ def _bm25_scores(corpus: list[list[str]], query_tokens: list[str]) -> list[float
         return scores
 
 
+# 🎯 坚固的 RAG 拒答词过滤机制。
+# 阻止那些无实质含义的问候句、语气助词或系统指代词（如“帮我”、“你好”）无端激活 RAG 匹配分，防止把无关的随机向量碎片灌给 LLM 导致胡言乱语。
 RAG_CONVERSATIONAL_STOPWORDS = {
     "这个", "那个", "能够", "可以", "能够", "帮我", "做什么", "做点什么", 
     "功能", "介绍", "自己", "是谁", "谁是", "你好", "您好", "怎么", "如何", 
@@ -380,10 +454,25 @@ RAG_CONVERSATIONAL_STOPWORDS = {
 
 
 def _has_evidence(sources: list[dict], query: str) -> bool:
+    """
+    RAG 核心守门人：判断召回是否属于“有效证据”。
+
+    🛡️ 防御性设计：
+        - 为什么要做证据判定？
+          如果用户发“早上好！”，向量检索会因为密度的余弦相似度计算特征，强制返回一篇含有“早上”或字面上最接近的完全不相干的文章作为上下文。
+          这会诱发严重的 LLM 生成幻觉（大模型被喂入无意义文章后，可能会强行把问候语同产品说明文缝合在一起）。
+        
+    🧠 判断阈值逻辑：
+        1. 前置清扫过滤停用词，检查 Query 的实质词是否真的包含在返回的 Snippet 原文中。
+        2. 如果词汇层面无交集，严格检查三大通道的评分底线：
+           - BM25 Score > 0 （确认存在精确的分词交叠）。
+           - Dense Channel 余弦分值 >= 0.40 （向量距离底线线）。
+           - Rerank 重排打分值 >= 0.40 （高保真重排重估得分阈值）。
+           一旦均低于上述底线，本方法将返回 `False` 触发拒答或使用大模型本能兜底。
+    """
     if not sources:
         return False
         
-    # 过滤掉常见的辅助性/对话性停用词，避免其误匹配知识库中的通用词（例如“智能”、“系统”等）
     tokens = [
         token for token in _tokenize(query) 
         if len(token) > 1 and token.lower() not in RAG_CONVERSATIONAL_STOPWORDS
@@ -391,22 +480,15 @@ def _has_evidence(sources: list[dict], query: str) -> bool:
     
     snippets = " ".join(source.get("snippet", "") for source in sources).lower()
     
-    # 1. 关键字匹配：如果查询中过滤后的关键分词与返回的文章片段有交集
     if tokens and any(token.lower() in snippets for token in tokens):
         return True
         
-    # 2. 检索得分质量校验：
-    # 如果没有关键字直接重叠，我们需要检查密集检索（dense）或重排（rerank）的得分是否达到合理的相关度阈值，
-    # 从而避免非相关对话（如打招呼、问好）的纯随机向量邻居被当作“有证据”的知识返回。
     for source in sources:
         channel = source.get("retrieval_channel", "")
-        # 如果是 BM25 检索到了且得分大于 0，说明存在一定的词频重叠
         if "bm25" in channel and source.get("bm25_score", 0.0) > 0:
             return True
-        # 如果是 Dense 检索，其余相似度（通常为余弦相似度）必须在合理阈值（>= 0.40）之上才算作真实证据
         if "dense" in channel and source.get("dense_score", 0.0) >= 0.40:
             return True
-        # 如果是 Rerank 重排，重排得分通常在相似度范围内，也需要 >= 0.40 算作证据
         if "rerank" in channel and (source.get("score", 0.0) >= 0.40 or source.get("dense_score", 0.0) >= 0.40):
             return True
             
@@ -414,6 +496,13 @@ def _has_evidence(sources: list[dict], query: str) -> bool:
 
 
 def _cache_key(db: Session, *, workspace_id: int, knowledge_base_ids: list[int], query: str, config: dict) -> str:
+    """
+    生成 RAG 独一无二的自适应缓存键。
+    
+    ⚡ 边界与性能思考：
+        - 对检索的 Query 进行空白压缩、首尾剔除与小写化规整，让逻辑一致但格式微小的不同 Query 能够复用同一份 RAG 缓存。
+        - 缓存键包含基于文档元数据时间戳演进的 `version` 值。这意味着只要数据库底层任何一篇知识文档发生过修改，生成的缓存键必定彻底失效，确保缓存永远为新鲜热数据，拒绝任何“脏数据”重放。
+    """
     stats = (
         db.query(
             KnowledgeDocument.knowledge_base_id,
