@@ -29,12 +29,13 @@ from core.services.models import model_payload
 from core.services.tools import tool_payload
 from core.services.user_models import user_model_snapshot
 
-
+# 🎯 系统预设推荐词
 DEFAULT_SUGGESTED_QUESTIONS = [
     "这个智能体能帮我做什么？",
     "请基于知识库回答一个问题。",
 ]
 
+# 🎯 平台预设记忆参数、RAG 融合检索指标及工具绑定默认规则
 DEFAULT_MEMORY = {"enabled": False, "strategy": "session_summary", "max_messages": 12}
 DEFAULT_RAG = {
     "enabled_by_default": True,
@@ -48,6 +49,8 @@ DEFAULT_RAG = {
     "refuse_when_no_evidence": True,
 }
 DEFAULT_TOOL_POLICY = {"mode": "auto", "allowed_tool_names": []}
+
+# 🛡️ 兼容性演进：旧版本系统词汇转换为个人友好词汇（智能体去团队化规整）
 LEGACY_TEAM_AGENT_TEXT = {
     "description": (
         "面向团队内部使用的自定义智能体。",
@@ -65,6 +68,12 @@ LEGACY_TEAM_AGENT_TEXT = {
 
 
 def agent_summary(agent: Agent) -> dict:
+    """
+    智能体模型元数据精简提取（DTO 映射）。
+    
+    🛡️ 防御性设计：
+        - 标题及描述等输出时，通过 `current_agent_text` 动态清洗历史旧文案，保证统一的用户体验。
+    """
     return {
         "id": agent.id,
         "name": agent.name,
@@ -84,10 +93,18 @@ def agent_summary(agent: Agent) -> dict:
 
 
 def get_agent_detail(db: Session, agent: Agent) -> dict:
+    """
+    获取智能体最完整的资产元配置（Agent Detail Snapshot）。
+
+    🎯 意图与工程大局观：
+        构建一个 Agent 运行时所需的全部配置面，包含绑定关系数据库关系（知识库、工具）、工作流图元定义、
+        Agent 高级设置、以及私有 BYOK 模型快照等。该输出常被用作发布历史版本快照。
+    """
     kb_ids = [
         row.knowledge_base_id
         for row in db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.agent_id == agent.id).all()
     ]
+    # ⚡ 性能考虑：外键.in_ 查询，避免 O(N) 的 N+1 次数据库往返
     tool_ids = [row.tool_id for row in db.query(AgentTool).filter(AgentTool.agent_id == agent.id).all()]
     tools = db.query(Tool).filter(Tool.id.in_(tool_ids)).all() if tool_ids else []
     workflow = db.query(WorkflowDefinition).filter(WorkflowDefinition.agent_id == agent.id).first()
@@ -112,6 +129,9 @@ def get_agent_detail(db: Session, agent: Agent) -> dict:
 
 
 def create_agent(db: Session, *, workspace_id: int, user_id: int, payload: dict) -> Agent:
+    """
+    创建智能体及其所有依赖关系记录的统一事务函数。
+    """
     agent = Agent(
         workspace_id=workspace_id,
         model_id=payload.get("model_id"),
@@ -126,7 +146,7 @@ def create_agent(db: Session, *, workspace_id: int, user_id: int, payload: dict)
         created_by=user_id,
     )
     db.add(agent)
-    db.flush()
+    db.flush() # flush 以提前获取物理自增 id
     db.add(WorkflowDefinition(agent_id=agent.id, nodes=DEFAULT_WORKFLOW))
     db.add(
         AgentSettings(
@@ -146,6 +166,9 @@ def create_agent(db: Session, *, workspace_id: int, user_id: int, payload: dict)
 
 
 def update_agent(db: Session, agent: Agent, payload: dict) -> Agent:
+    """
+    更新智能体核心属性及其映射资产的统一事务函数。
+    """
     for key in ["model_id", "user_model_config_id"]:
         if key in payload:
             setattr(agent, key, payload[key])
@@ -174,6 +197,14 @@ def update_agent(db: Session, agent: Agent, payload: dict) -> Agent:
 
 
 def publish_agent(db: Session, agent: Agent, user_id: int, *, require_review: bool = False) -> AgentVersion:
+    """
+    智能体版本快照发布。
+
+    🎯 意图与工程大局观：
+        为当前草稿态 Agent 生成独立的持久化不可变 Snapshot（版本自增 1）。
+        支持平台审批管理流：若开启审核机制，状态置为 `pending_review`，不更改当前线上版本；
+        否则自动生效，将 `published_version_id` 修改为本最新生成的快照 ID。
+    """
     latest = db.query(AgentVersion).filter(AgentVersion.agent_id == agent.id).order_by(AgentVersion.version.desc()).first()
     version_number = (latest.version + 1) if latest else 1
     snapshot = get_agent_detail(db, agent)
@@ -191,6 +222,10 @@ def publish_agent(db: Session, agent: Agent, user_id: int, *, require_review: bo
 
 
 def ensure_template_agents_published(db: Session, workspace_id: int) -> None:
+    """
+    系统自举后置操作：确保特定工作区内所有处于 template 状态的智能体都已经拥有发布版本快照，
+    解决应用初始化或模板市场数据自举后的快照引用状态完备性。
+    """
     templates = (
         db.query(Agent)
         .filter(Agent.workspace_id == workspace_id, Agent.is_template.is_(True))
@@ -218,10 +253,12 @@ def ensure_template_agents_published(db: Session, workspace_id: int) -> None:
 
 
 def latest_agent_version(db: Session, agent: Agent) -> AgentVersion | None:
+    """获取最新快照纪录。"""
     return db.query(AgentVersion).filter(AgentVersion.agent_id == agent.id).order_by(AgentVersion.version.desc()).first()
 
 
 def approve_agent(db: Session, agent: Agent, reviewer_id: int) -> AgentVersion:
+    """管理员审批同意 Agent 模版发布上线，强制激活最新草稿版本快照为线上当前版本。"""
     version = latest_agent_version(db, agent)
     if not version:
         version = publish_agent(db, agent, reviewer_id, require_review=False)
@@ -233,6 +270,7 @@ def approve_agent(db: Session, agent: Agent, reviewer_id: int) -> AgentVersion:
 
 
 def reject_agent(db: Session, agent: Agent) -> Agent:
+    """管理员驳回模板智能体上线申请。"""
     agent.status = "rejected"
     db.commit()
     db.refresh(agent)
@@ -240,6 +278,17 @@ def reject_agent(db: Session, agent: Agent) -> Agent:
 
 
 def delete_agent(db: Session, agent: Agent) -> None:
+    """
+    智能体级联物理擦除（级联灾难清理）。
+
+    🛡️ 坚固的防御性安全防线：
+        - 系统级只读模板智能体禁止被任意物理删除（is_template 保护），防止公共资源损坏。
+        
+    ⚡ 性能与并发冲突思考：
+        - 采取关系关联表的大批量主动删除策略。
+        - 通过 `synchronize_session=False` 告诉 SQLAlchemy 绕过一级缓存对象查找，直接向数据库发起批式物理删除 SQL，
+          规避了由于加载数万条历史 Message 导致的进程 OOM 问题，极大地压缩了事务耗时和 I/O 吞吐。
+    """
     if agent.is_template:
         raise ValueError("Template agents cannot be deleted")
 
@@ -258,13 +307,17 @@ def delete_agent(db: Session, agent: Agent) -> None:
         for row in db.query(Run.id).filter(Run.agent_id == agent.id).all()
     ]
 
+    # 1. 物理删除关联 Trace 反馈
     if message_ids:
         db.query(Feedback).filter(Feedback.message_id.in_(message_ids)).delete(synchronize_session=False)
+    # 2. 物理删除关联工作流 Trace Step 轨迹
     if run_ids:
         db.query(RunStep).filter(RunStep.run_id.in_(run_ids)).delete(synchronize_session=False)
+    # 3. 物理删除关联会话滚动记忆、历史会话消息
     if session_ids:
         db.query(SessionMemory).filter(SessionMemory.session_id.in_(session_ids)).delete(synchronize_session=False)
         db.query(Message).filter(Message.session_id.in_(session_ids)).delete(synchronize_session=False)
+    # 4. 物理删除执行 Run、会话、绑定关系以及配置项
     db.query(Run).filter(Run.agent_id == agent.id).delete(synchronize_session=False)
     db.query(ChatSession).filter(ChatSession.agent_id == agent.id).delete(synchronize_session=False)
     db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.agent_id == agent.id).delete(synchronize_session=False)
@@ -278,6 +331,7 @@ def delete_agent(db: Session, agent: Agent) -> None:
 
 
 def market_agent_summary(agent: Agent, version: AgentVersion | None = None) -> dict:
+    """提取市场模版智能体详情（DTO）。"""
     snapshot = normalize_snapshot_text((version.snapshot if version else None) or {})
     return {
         "id": agent.id,
@@ -293,6 +347,13 @@ def market_agent_summary(agent: Agent, version: AgentVersion | None = None) -> d
 
 
 def copy_agent_from_market(db: Session, *, source: Agent, user_id: int, workspace_id: int) -> Agent:
+    """
+    从智能体广场拷贝（克隆）一个公开分享的智能体到当前租户的私有空间中。
+
+    🎯 意图与工程大局观：
+        - 必须依靠已发布的快照版本（`published_version_id`）为源，绝不能使用其可变的草稿。
+        - 拷贝包含完整的工作流结构编排，并在最后强制追加“副本”后缀解决标题冲突。
+    """
     version = db.get(AgentVersion, source.published_version_id) if source.published_version_id else None
     if not version:
         raise ValueError("Agent has no approved version")
@@ -329,11 +390,13 @@ def copy_agent_from_market(db: Session, *, source: Agent, user_id: int, workspac
 
 
 def current_agent_text(field: str, value: str) -> str:
+    """清洗老版本遗留下的“团队智能体”硬编码说明文本，抹平历史遗留语境。"""
     old_value, new_value = LEGACY_TEAM_AGENT_TEXT.get(field, ("", ""))
     return new_value if value == old_value else value
 
 
 def normalize_snapshot_text(snapshot: dict) -> dict:
+    """深拷贝并在快照文本层面清洗遗留旧词汇。"""
     data = copy.deepcopy(snapshot)
     for field in ["description", "opening_message", "system_prompt"]:
         if field in data:
@@ -342,6 +405,7 @@ def normalize_snapshot_text(snapshot: dict) -> dict:
 
 
 def ensure_agent_settings(db: Session, agent_id: int) -> AgentSettings:
+    """智能体高级设置防线：如缺失（旧智能体或新数据自举时），自动通过本工厂方法生成默认的高级设置实体，保证数据一致性。"""
     settings = db.query(AgentSettings).filter(AgentSettings.agent_id == agent_id).first()
     if settings:
         return settings
@@ -359,12 +423,20 @@ def ensure_agent_settings(db: Session, agent_id: int) -> AgentSettings:
 
 
 def normalize_questions(value) -> list[str]:
+    """清洗并强限制预设提问条数（硬上限 8 条，防前端报文滥用）。"""
     if not value:
         return []
     return [str(item).strip() for item in value if str(item).strip()][:8]
 
 
 def normalize_variables(value) -> list[dict]:
+    """
+    清洗并限制智能体全局动态自定义插值变量。
+    
+    🧠 魔鬼数字限制：
+        - 强制限制变量上限为 20 个，避免大体积冗余变量撑爆系统上下文 Token 大小。
+        - 变量类型强白名单判定：只允许 `string`、`number`、`boolean`，防代码注入或恶意数据污染。
+    """
     if not value:
         return []
     allowed_types = {"string", "number", "boolean"}
@@ -389,6 +461,10 @@ def normalize_variables(value) -> list[dict]:
 
 
 def normalize_memory(value) -> dict:
+    """
+    规整短期记忆参数。
+    最大对话轮次（max_messages）上限硬限制为 100 轮，规避因对话记忆滚存过长触发的 LLM 溢出挂起异常。
+    """
     data = value.model_dump() if hasattr(value, "model_dump") else dict(value or {})
     strategy = data.get("strategy") if data.get("strategy") == "session_summary" else "session_summary"
     max_messages = int(data.get("max_messages") or 12)
@@ -396,6 +472,14 @@ def normalize_memory(value) -> dict:
 
 
 def normalize_rag(value) -> dict:
+    """
+    规整 RAG 混合召回和算分重排参数。
+    
+    🧠 核心阈值与边界限制（抗网络超载限流防御）：
+        - 全局 RAG 最终截断 top_k 限制在 1 - 20 内。
+        - 多路检索 Dense/BM25 通道单路最多只提取 50 片，防 Milvus / 数据库因大批量读取导致内存暴涨。
+        - Rerank 最多重排 20 片，在重排模型的并发能力与耗时成本之间取得最佳的折中，防止 Rerank 超时卡死流程。
+    """
     settings = get_settings()
     data = value.model_dump() if hasattr(value, "model_dump") else dict(value or {})
     top_k = int(data.get("top_k") or settings.rag_top_k)
@@ -417,6 +501,7 @@ def normalize_rag(value) -> dict:
 
 
 def normalize_tool_policy(value) -> dict:
+    """规整工具调度策略允许列表。"""
     data = value.model_dump() if hasattr(value, "model_dump") else dict(value or {})
     mode = data.get("mode") if data.get("mode") == "auto" else "auto"
     names = [str(item).strip() for item in data.get("allowed_tool_names", []) if str(item).strip()]
@@ -424,16 +509,19 @@ def normalize_tool_policy(value) -> dict:
 
 
 def _replace_agent_knowledge(db: Session, agent_id: int, knowledge_base_ids: list[int]) -> None:
+    """全量覆盖智能体绑定的知识库。"""
     db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.agent_id == agent_id).delete()
     for kb_id in knowledge_base_ids:
         db.add(AgentKnowledgeBase(agent_id=agent_id, knowledge_base_id=kb_id))
 
 
 def _replace_agent_tools(db: Session, agent_id: int, tool_ids: list[int]) -> None:
+    """全量覆盖智能体绑定的外部工具。"""
     db.query(AgentTool).filter(AgentTool.agent_id == agent_id).delete()
     for tool_id in tool_ids:
         db.add(AgentTool(agent_id=agent_id, tool_id=tool_id))
 
 
 def workspace_kb_exists(db: Session, workspace_id: int, kb_id: int) -> bool:
+    """校验某个知识库是否存在于工作空间中。"""
     return db.query(KnowledgeBase).filter(KnowledgeBase.workspace_id == workspace_id, KnowledgeBase.id == kb_id).first() is not None

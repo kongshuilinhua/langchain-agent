@@ -1,3 +1,15 @@
+"""
+灵枢 Agent 平台 —— 全局配置中心模块。
+
+🎯 架构角色：
+    本模块是整个平台的「单一事实来源」(Single Source of Truth)，所有子系统
+    （LLM 网关、RAG 检索引擎、向量数据库、安全层、Web 搜索）的可调参数
+    都集中在此通过环境变量注入，避免硬编码散落在业务逻辑中。
+
+    使用 pydantic-settings 实现「环境变量 → 强类型 Python 对象」的自动映射，
+    并通过 @lru_cache 保证全局唯一实例（进程级单例）。
+"""
+
 from functools import lru_cache
 from pathlib import Path
 from pydantic import AliasChoices, Field, field_validator
@@ -5,79 +17,157 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """
+    全局配置类，承载平台所有可调参数。
+
+    🎯 设计意图：
+        - 通过 env_file 支持 .env 和 .env.local 双层覆盖，方便本地开发与 CI 环境隔离
+        - extra="ignore" 忽略未声明的环境变量，防止拼写错误的变量导致启动崩溃
+        - 所有敏感字段（API Key、JWT Secret）通过 alias 映射大写环境变量名，符合 12-Factor 规范
+    """
+
     model_config = SettingsConfigDict(env_file=(".env", ".env.local"), env_file_encoding="utf-8", extra="ignore")
 
+    # ── 应用基础信息 ────────────────────────────────────────────
     app_name: str = "Lingshu Agent"
     app_version: str = "0.1.0"
+
+    # ── 认证与安全 ──────────────────────────────────────────────
+    # 🛡️ JWT 密钥：生产环境必须替换默认值，否则任何人都能伪造令牌
     jwt_secret: str = Field(default="change-me-in-production", alias="JWT_SECRET")
+    # 🧠 HS256 对称签名算法：性能好、适合单体部署；若需微服务间验证，应切换为 RS256 非对称算法
     jwt_algorithm: str = "HS256"
+    # ⚡ 令牌有效期 1440 分钟（24 小时），平衡安全性与用户体验；缩短可降低令牌泄漏风险
     access_token_minutes: int = 60 * 24
+    # 🛡️ API 密钥加密密钥：用于 Fernet 对称加密存储用户的第三方 API Key，与 JWT Secret 解耦防止单点泄漏
     api_key_encryption_key: str | None = Field(default=None, alias="API_KEY_ENCRYPTION_KEY")
+    # 邀请制注册开关：关闭时任何人可自由注册
     invite_api_enabled: bool = Field(default=False, alias="INVITE_API_ENABLED")
+    # 🛡️ CORS 白名单：限制前端来源，防止跨站请求伪造
     cors_origins: str = Field(default="http://127.0.0.1:5174,http://localhost:5174", alias="CORS_ORIGINS")
 
+    # ── 数据库 ──────────────────────────────────────────────────
     database_url: str = Field(
         default="postgresql+psycopg2://lingshu:lingshu@192.168.150.101:5433/lingshu_agent",
         alias="DATABASE_URL",
     )
+    # Redis 用于 RAG 检索结果缓存，非必须依赖（不配置则静默跳过缓存）
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
 
+    # ── LLM 供应商配置 ─────────────────────────────────────────
+    # 🎯 多供应商路由设计：默认走阿里云灵积(DashScope)的 OpenAI 兼容接口，
+    #    也可无缝切换至 DeepSeek 或任何 OpenAI 兼容端点
     openai_api_base: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1", alias="OPENAI_API_BASE")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    # 🧠 默认聊天模型：qwen-plus 是阿里通义千问的高性价比版本，131K 上下文窗口
     openai_model: str = Field(default="qwen-plus", alias="OPENAI_MODEL")
+    # 🧠 Embedding 模型：text-embedding-v4 是灵积平台最新的高维向量模型
     openai_embedding_model: str = Field(default="text-embedding-v4", alias="OPENAI_EMBEDDING_MODEL")
     dashscope_api_key: str | None = Field(default=None, alias="DASHSCOPE_API_KEY")
     deepseek_api_base: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_API_BASE")
     deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
     deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
+    # 独立的 Embedding / Rerank 端点，允许将嵌入服务与聊天服务部署在不同集群
     embedding_api_base: str | None = Field(default=None, alias="EMBEDDING_API_BASE")
     embedding_api_key: str | None = Field(default=None, alias="EMBEDDING_API_KEY")
     rerank_api_base: str | None = Field(default=None, alias="RERANK_API_BASE")
     rerank_api_key: str | None = Field(default=None, alias="RERANK_API_KEY")
+    # 健康检查是否探测模型端点连通性
     health_model_probe_enabled: bool = Field(default=True, alias="HEALTH_MODEL_PROBE_ENABLED")
+    # 🛡️ Mock LLM 模式：测试环境下跳过真实 API 调用，返回确定性伪造结果，保证 CI 稳定性
     mock_llm: bool = Field(default=False, validation_alias=AliasChoices("LINGSHU_MOCK_LLM", "SWEEPER_MOCK_LLM"))
 
+    # ── 向量数据库 (Milvus) ─────────────────────────────────────
     milvus_uri: str = Field(default="http://192.168.150.101:19530", alias="MILVUS_URI")
     milvus_token: str | None = Field(default=None, alias="MILVUS_TOKEN")
+    # 🧠 Collection 命名约定：一个平台实例对应一个 collection，通过 metadata 过滤实现多租户隔离
     milvus_collection: str = Field(default="lingshu_chunks", alias="MILVUS_COLLECTION")
+    # 向量维度：留空则自动从首次 embed 结果推断，设置后可强制固定维度
     milvus_dimension: int | None = Field(default=None, alias="MILVUS_DIMENSION")
+    # 🛡️ 向量后端选择："memory" 为开发模式（纯内存，重启丢失）；"milvus" 为生产模式
     vector_backend: str = Field(default="memory", validation_alias=AliasChoices("LINGSHU_VECTOR_BACKEND", "SWEEPER_VECTOR_BACKEND"))
 
+    # ── RAG 混合检索参数 ────────────────────────────────────────
+    # 🧠 以下参数控制 Dense + BM25 + RRF 三路混合检索管线的行为
+
+    # top_k: 最终返回给 LLM 的知识片段数量
+    # ⚡ 值过高 → 注入过多上下文导致 token 浪费和注意力稀释；值过低 → 可能遗漏关键证据
     rag_top_k: int = Field(default=4, alias="RAG_TOP_K")
+
+    # dense_top_k: 向量相似度检索（Dense Retrieval）的候选数量
+    # 🧠 这是第一路检索通道，通过 Embedding 余弦相似度召回语义相关片段
+    # ⚡ 设为 12 是因为后续还有 RRF 融合和 Rerank 精排，需要足够大的候选池
     rag_dense_top_k: int = Field(default=12, alias="RAG_DENSE_TOP_K")
+
+    # bm25_top_k: BM25 稀疏检索的候选数量
+    # 🧠 第二路检索通道，基于词频-逆文档频率的经典信息检索算法，擅长精确关键词匹配
+    # ⚡ 与 dense_top_k 对称设置，保证两路检索在 RRF 融合时贡献均衡
     rag_bm25_top_k: int = Field(default=12, alias="RAG_BM25_TOP_K")
+
+    # rrf_k: Reciprocal Rank Fusion 融合常数
+    # 🧠 RRF 公式：score = Σ 1/(k + rank_i)，k 越大则各路排名差异的影响越平滑
+    # ⚡ k=60 是学术界常用默认值（来自 Cormack et al. 2009），适用于大多数场景
+    #    k 过小 → 排名靠前的结果权重过大，接近 winner-take-all；k 过大 → 趋近于均匀分配
     rag_rrf_k: int = Field(default=60, alias="RAG_RRF_K")
+
+    # Rerank 重排序：使用 Cross-Encoder 或 API 对 RRF 融合结果做精排
     rag_rerank_enabled: bool = Field(default=True, alias="RAG_RERANK_ENABLED")
     rag_rerank_model: str = Field(default="qwen3-rerank", alias="RAG_RERANK_MODEL")
+    # rerank_top_n: 精排后保留的候选数，通常大于最终 top_k 以给后续过滤留余量
     rag_rerank_top_n: int = Field(default=6, alias="RAG_RERANK_TOP_N")
+
+    # RAG 缓存策略：相同查询 + 相同知识库版本 → 命中缓存，避免重复 Embedding + 检索开销
     rag_cache_enabled: bool = Field(default=True, alias="RAG_CACHE_ENABLED")
+    # 🧠 缓存 TTL 3600 秒（1 小时）：平衡实时性与性能，知识库更新会通过版本哈希自动失效
     rag_cache_ttl_seconds: int = Field(default=3600, alias="RAG_CACHE_TTL_SECONDS")
+    # 🛡️ 无证据时拒绝回答：防止 LLM 在知识库无相关内容时产生幻觉
     rag_refuse_when_no_evidence: bool = Field(default=True, alias="RAG_REFUSE_WHEN_NO_EVIDENCE")
 
+    # ── Web 搜索 ────────────────────────────────────────────────
     web_search_enabled: bool = Field(default=True, alias="WEB_SEARCH_ENABLED")
+    # 🧠 使用 DuckDuckGo HTML 版本：免费、无需 API Key、无速率限制，但依赖 HTML 解析稳定性
     web_search_provider: str = Field(default="duckduckgo_html", alias="WEB_SEARCH_PROVIDER")
     web_search_top_k: int = Field(default=5, alias="WEB_SEARCH_TOP_K")
+    # ⚡ 搜索超时 8 秒：DDG 在中国大陆可能较慢，过短会频繁超时，过长会阻塞用户请求
     web_search_timeout_seconds: int = Field(default=8, alias="WEB_SEARCH_TIMEOUT_SECONDS")
+    # 🛡️ 响应体大小上限 512KB：防止恶意或异常网页导致内存暴涨
     web_search_max_response_bytes: int = Field(default=512 * 1024, alias="WEB_SEARCH_MAX_RESPONSE_BYTES")
     web_search_user_agent: str = Field(default="LingshuAgent/0.1 (+https://local.lingshu.agent)", alias="WEB_SEARCH_USER_AGENT")
 
+    # ── 文件上传 ────────────────────────────────────────────────
+    # 🛡️ 上传大小限制 8MB：防止超大文件拖垮文本提取和向量化流程
     upload_max_bytes: int = Field(default=8 * 1024 * 1024, alias="UPLOAD_MAX_BYTES")
 
+    # ── 存储路径 ────────────────────────────────────────────────
     data_dir: Path = Path("data")
     upload_dir: Path = Path("storage/uploads")
 
     @field_validator("milvus_dimension", mode="before")
     @classmethod
     def empty_dimension_is_none(cls, value):
+        """
+        🛡️ 防御性处理：环境变量传入空字符串时转为 None，
+        避免 int("") 抛出 ValueError 导致启动失败。
+        """
         if value == "":
             return None
         return value
 
     @property
     def cors_origin_list(self) -> list[str]:
+        """将逗号分隔的 CORS 来源字符串解析为列表，过滤空白项。"""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """
+    全局配置单例工厂。
+
+    🎯 使用 @lru_cache 保证整个进程生命周期内只解析一次环境变量，
+    后续调用直接返回缓存实例，零开销。
+
+    ⚡ 注意：@lru_cache 意味着运行时修改环境变量不会生效，
+    这是有意为之——配置应在启动时确定，运行时不可变。
+    """
     return Settings()

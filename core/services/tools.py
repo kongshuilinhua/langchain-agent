@@ -26,22 +26,37 @@ from core.db.models import Agent, AgentTool, Tool
 from core.security.api_keys import decrypt_api_key, encrypt_api_key
 from core.services import web_search as web_search_service
 
-
+# 🧠 魔鬼数字：防范 HTTP 响应体过大导致的内存抖动和 OOM 崩溃，上限硬性限制为 1MB
 MAX_RESPONSE_BYTES = 1024 * 1024
 TOOL_TYPES = {"builtin", "builtin_search", "http"}
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 AUTH_TYPES = {"none", "bearer", "header", "query"}
+# 🛡️ 安全限制：禁止工具请求云原生环境的元数据地址，防止服务器凭证泄露漏洞
 CLOUD_METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 
 import threading
 from contextlib import contextmanager
 
-# Thread-local storage to hold host-to-IP mappings during requests
+# 🎯 线程本地存储（Thread-Local Storage）：用于保障高并发请求下 DNS Pinning 独立工作，防止线程串扰
 _local_dns_pinning = threading.local()
+
 
 @contextmanager
 def dns_pinned(host: str, ip: str):
-    """Context manager to pin DNS lookups for a specific host to a specific IP."""
+    """
+    🛡️ 精准防御：DNS 固化上下文管理器（Anti-DNS Rebinding）。
+
+    🎯 意图与工程大局观：
+        为 HTTP 插件调用提供高级别 SSRF 安全阻断。
+        - 为什么要做 DNS Pinning？
+          传统的 SSRF 防御只在解析 URL 时通过 `socket.gethostbyname` 验证 IP。
+          攻击者可以利用 DNS Rebinding（重绑定）技术：在第一次 DNS 解析时返回外网合法 IP，在实际发起 HTTP 请求建立 TCP 连接的瞬间（由 requests 库再次发起 DNS 解析），将域名解析修改为内网私有 IP（如 `127.0.0.1`），从而绕过所有前置 IP 校验。
+        
+    🛡️ 防御机制：
+        1. 在解析校验阶段得到安全的 `validated_ip`。
+        2. 通过劫持全局 `socket.getaddrinfo`，在上下文生命周期内，强制将目标 Host 仅解析为指定的固化 IP。
+        3. 即使 requests 库在建立连接时发起第二次 DNS 解析，也只会被引流至安全的 IP，完美切断 DNS Rebinding 攻击链条。
+    """
     if not hasattr(_local_dns_pinning, "pins"):
         _local_dns_pinning.pins = {}
     _local_dns_pinning.pins[host.lower()] = ip
@@ -80,6 +95,8 @@ _BUILTIN_FUNCS = {
     "pi": _math.pi, "e": _math.e,
 }
 
+# 🎯 平台内置免 Key 开箱即用工具箱。
+# 每一个内置工具均有严密的 JSON Schema 输入声明和对应的硬编码执行实现。
 BUILTIN_TOOLS: dict[str, dict] = {
     "current_time": {
         "description": "获取当前日期和时间，支持折算全球时区。",
@@ -311,6 +328,10 @@ BUILTIN_TOOLS: dict[str, dict] = {
 
 
 def tool_payload(tool: Tool) -> dict:
+    """
+    将数据库 Tool ORM 模型规整并脱敏后返回。
+    对存储的加密鉴权密钥进行 has_secret 布尔断言，绝对禁止向下游直接泄露 `encrypted_secret`。
+    """
     return {
         "id": tool.id,
         "type": tool.type,
@@ -339,6 +360,9 @@ def tool_payload(tool: Tool) -> dict:
 
 
 def list_available_tools(db: Session, *, workspace_id: int, user_id: int) -> list[Tool]:
+    """
+    查询当前租户在当前工作区内可见的所有工具列表（包括系统全局只读工具及自建私有工具）。
+    """
     return (
         db.query(Tool)
         .filter(
@@ -351,6 +375,9 @@ def list_available_tools(db: Session, *, workspace_id: int, user_id: int) -> lis
 
 
 def get_accessible_tool(db: Session, *, workspace_id: int, user_id: int, tool_id: int) -> Tool | None:
+    """
+    多租户隔离式获取特定工具，防范水平越权（ID 嗅探攻击）。
+    """
     return (
         db.query(Tool)
         .filter(
@@ -363,6 +390,9 @@ def get_accessible_tool(db: Session, *, workspace_id: int, user_id: int, tool_id
 
 
 def create_tool(db: Session, *, workspace_id: int, user_id: int, payload: dict) -> Tool:
+    """
+    创建自定义 HTTP 工具。
+    """
     data = _tool_fields(payload)
     if _tool_name_exists(db, workspace_id=workspace_id, user_id=user_id, name=data["name"]):
         raise ValueError("Tool name already exists")
@@ -375,6 +405,13 @@ def create_tool(db: Session, *, workspace_id: int, user_id: int, payload: dict) 
 
 
 def update_tool(db: Session, *, tool: Tool, payload: dict) -> Tool:
+    """
+    修改自定义 HTTP 工具。
+    
+    🛡️ 安全设计：
+        - 严禁修改系统预设的全局只读工具（user_id is None）。
+        - 处理 secret 密文密钥更新时，使用 `encrypt_api_key` 自动密文持久化；如果传入 clear_secret，则支持置空重置。
+    """
     if tool.user_id is None:
         raise ValueError("Built-in tools cannot be modified")
     data = _tool_fields(payload, partial=True, existing=tool)
@@ -394,6 +431,10 @@ def update_tool(db: Session, *, tool: Tool, payload: dict) -> Tool:
 
 
 def delete_tool(db: Session, *, tool: Tool) -> None:
+    """
+    物理删除自定义工具。
+    🛡️ 防灾级校验：除内置校验外，必须判定是否有 Agent（AgentTool 映射表）处于实质绑定激活状态。如占用，必须拒绝删除以防运行时奔溃。
+    """
     if tool.user_id is None:
         raise ValueError("Built-in tools cannot be deleted")
     if db.query(AgentTool.id).filter(AgentTool.tool_id == tool.id).first():
@@ -403,6 +444,9 @@ def delete_tool(db: Session, *, tool: Tool) -> None:
 
 
 def validate_tool_ids(db: Session, *, workspace_id: int, user_id: int, tool_ids: list[int]) -> None:
+    """
+    大批量工具绑定时的租户归属与激活状态前置校验哨兵。
+    """
     for tool_id in tool_ids:
         tool = get_accessible_tool(db, workspace_id=workspace_id, user_id=user_id, tool_id=tool_id)
         if not tool or not tool.enabled:
@@ -410,6 +454,10 @@ def validate_tool_ids(db: Session, *, workspace_id: int, user_id: int, tool_ids:
 
 
 def test_tool(tool: Tool, *, input_data: dict | None = None, body=None) -> dict:
+    """
+    调试/测试执行单个工具。
+    在 try-catch 防护下捕获所有运行时异常并规整为标准响应 preview，决不在调试阶段抛出 HTTP 500。
+    """
     started = time.monotonic()
     try:
         output = execute_tool(tool, {"input": input_data or {}, "body": body})
@@ -435,6 +483,10 @@ def test_tool(tool: Tool, *, input_data: dict | None = None, body=None) -> dict:
 
 
 def execute_tool(tool: Tool, context: dict) -> dict:
+    """
+    工具引擎路由调度。
+    分流调度内置小工具（builtin）、内置 Web 检索插件（builtin_search）与任意自定义 HTTP 通用接口服务。
+    """
     if not tool.enabled:
         raise ValueError("Tool is disabled")
     if tool.type == "builtin":
@@ -447,6 +499,9 @@ def execute_tool(tool: Tool, context: dict) -> dict:
 
 
 def tool_call_event(tool: Tool, result: dict, *, status: str = "success", input_preview: str = "", error_code: str | None = None) -> dict:
+    """
+    生成规范化的 Agent Trace 节点级别事件日志负载。
+    """
     return {
         "tool_id": tool.id,
         "tool_name": tool.name,
@@ -460,6 +515,10 @@ def tool_call_event(tool: Tool, result: dict, *, status: str = "success", input_
 
 
 def _tool_fields(payload: dict, *, partial: bool = False, existing: Tool | None = None) -> dict:
+    """
+    🛡️ 极度严苛的工具创建/更新入参清洗过滤。
+    针对 http 工具的 timeout（限制在 1-30 秒内防止高并发慢连接占死线程池）、HTTP Method 白名单、以及最核心的 HTTPS URL 前置合法性与私网段 SSRF 审计防范。
+    """
     data = {key: value for key, value in payload.items() if value is not None}
     current_type = existing.type if existing else "http"
     tool_type = str(data.get("type", current_type)).strip() if ("type" in data or not partial) else current_type
@@ -525,6 +584,7 @@ def _tool_fields(payload: dict, *, partial: bool = False, existing: Tool | None 
 
 
 def _execute_builtin_search(tool: Tool, context: dict) -> dict:
+    """执行免 Key Web 网络检索子通道。"""
     query = _search_query(context)
     top_k = int((tool.search_options or {}).get("top_k") or 3)
     search_result = web_search_service.search_web(query, top_k=top_k, timeout_seconds=tool.timeout_seconds)
@@ -543,6 +603,7 @@ def _execute_builtin_search(tool: Tool, context: dict) -> dict:
 
 
 def _execute_builtin_tool(tool: Tool, context: dict) -> dict:
+    """路由执行内置小工具。"""
     impl = BUILTIN_TOOLS.get(tool.name)
     if not impl:
         raise ValueError(f"Built-in tool '{tool.name}' is not available")
@@ -553,6 +614,7 @@ def _execute_builtin_tool(tool: Tool, context: dict) -> dict:
 
 
 def _exec_current_time(args: dict) -> dict:
+    """时区自适应时间计算。"""
     tz_name = str(args.get("timezone") or "").strip()
     now = datetime.now(_timezone.utc)
     if tz_name:
@@ -578,7 +640,23 @@ def _exec_current_time(args: dict) -> dict:
 
 import ast
 
+
 class SafeEvalVisitor(ast.NodeVisitor):
+    """
+    🛡️ 极客级沙箱数学求解器（AST 语法树解构安全执行器）。
+
+    🎯 意图与工程大局观：
+        为大模型提供强大且高安全的计算器插件能力，防止命令注入。
+        - 为什么不用 `eval()`？
+          `eval("__import__('os').system('rm -rf /')")` 是严重的高危安全漏洞。
+        - 本 Visitor 采用白名单控制：
+          只允许访问纯数字 Constant、基础二进制一元操作符及特定的数学计算函数（如 `sqrt`/`log`），
+          其他任何语法结构（如 Import、Attribute、Subscript 等）在 AST 编译期直接被强行拦截抛错，阻断一切远程代码执行（RCE）的可能。
+          
+    🛡️ 防御性设计（计算抗爆炸防护）：
+        - 对 `Pow`（求幂操作符 `**`），加入 `abs(exponent) > 1000` 或 `abs(base) > 1e15` 限制，
+          强力杜绝类似于大模型幻觉计算 `99999999**99999999**99999999` 导致的物理服务器 CPU 暴涨挂起与拒绝服务攻击（Denial of Service）。
+    """
     def __init__(self, allowed_funcs, allowed_ops):
         self.allowed_funcs = allowed_funcs
         self.allowed_ops = allowed_ops
@@ -592,7 +670,7 @@ class SafeEvalVisitor(ast.NodeVisitor):
         op_type = type(node.op)
         if op_type not in self.allowed_ops:
             raise ValueError(f"Operator {op_type.__name__} is not allowed")
-        # Guard against exponent bombs (e.g. 10**10**10)
+        # 🛡️ 边界限制：抗幂级爆炸
         if op_type == ast.Pow:
             if isinstance(right, (int, float)) and abs(right) > 1000:
                 raise ValueError("Exponent too large (max 1000)")
@@ -639,11 +717,11 @@ class SafeEvalVisitor(ast.NodeVisitor):
 
 
 def _exec_calculator(args: dict) -> dict:
+    """计算数学表达式。"""
     expr = str(args.get("expression") or "").strip()
     if not expr:
         return {"content": json.dumps({"error": "No expression provided"}), "result_preview": "Error: empty expression"}
     
-    # 替换幂操作符
     sanitized = expr.replace("^", "**")
     try:
         allowed_ops = {
@@ -659,7 +737,7 @@ def _exec_calculator(args: dict) -> dict:
         }
         visitor = SafeEvalVisitor(_BUILTIN_FUNCS, allowed_ops)
         tree = ast.parse(sanitized, mode="eval")
-        result = visitor.visit(tree)
+        result = tree_result = visitor.visit(tree)
         if not isinstance(result, (int, float)):
             raise ValueError("Expression evaluated to a non-numeric result")
     except Exception as exc:
@@ -670,22 +748,28 @@ def _exec_calculator(args: dict) -> dict:
 
 
 def clean_html(html: str) -> str:
-    # Remove script and style tags
+    """清洗富 HTML 报文，提取无广告纯文本正文。"""
+    # 过滤脚本、多媒体及无实质内容的长布局块，压缩 DOM 大小
     html = re.sub(r'<(script|style|nav|footer|header|iframe|noscript)[^>]*>([\s\S]*?)<\/\1>', '', html, flags=re.I)
-    # Remove all HTML tags
     text = re.sub(r'<[^>]+>', '\n', html)
-    # Decode common HTML entities
     text = text.replace('&nbsp;', ' ').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&').replace('&quot;', '"')
-    # Collapse multiple newlines/spaces
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return "\n".join(lines)
 
 
 def _exec_web_reader(args: dict) -> dict:
+    """
+    抓取并深度阅读第三方网页正文。
+    
+    🛡️ 抗 SSRF 防御链：
+        - 必须是 http/https 开头且 Hostname 完整。
+        - Host 严禁匹配 localhost 环回域及 Google/AWS 元数据魔术地址。
+        - 将 Hostname 显式通过 DNS 寻址拉取 IP 地址并使用 `_reject_ip` 强制审计（排除内网私有 A/B/C 类 IP 段及 IPv6 环回地址）。
+        - 发起请求时使用 `dns_pinned` 锁死连接 IP，避免 DNS Rebinding 逃逸。
+    """
     url = str(args.get("url") or "").strip()
     if not url:
         return {"content": json.dumps({"error": "URL cannot be empty"}), "result_preview": "Error: Empty URL"}
-    # SSRF protection: block internal/private URLs
     try:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -712,10 +796,10 @@ def _exec_web_reader(args: dict) -> dict:
             return {"content": json.dumps({"error": f"Failed to fetch page. HTTP status: {resp.status_code}"}), "result_preview": f"HTTP Error: {resp.status_code}"}
         
         content = clean_html(resp.text)
-        # Try to parse title
         title_match = re.search(r'<title[^>]*>([\s\S]*?)<\/title>', resp.text, re.I)
         title = title_match.group(1).strip() if title_match else "Unknown Title"
         
+        # 🧠 魔鬼数字：返回正文前 3000 字，防大报文超大上下文爆 LLM 窗口
         payload = {"title": title, "url": url, "content_preview": content[:3000]}
         return {"content": json.dumps(payload, ensure_ascii=False), "result_preview": f"Read Page OK: {title}"}
     except Exception as e:
@@ -723,6 +807,7 @@ def _exec_web_reader(args: dict) -> dict:
 
 
 def _exec_wikipedia(args: dict) -> dict:
+    """维基百科条目免 Key 检索。"""
     query = str(args.get("query") or "").strip()
     lang = str(args.get("lang") or "zh").strip().lower()
     if not query:
@@ -745,6 +830,7 @@ def _exec_wikipedia(args: dict) -> dict:
 
 
 def _exec_arxiv_search(args: dict) -> dict:
+    """arXiv 学术文献免 Key 搜索。"""
     query = str(args.get("query") or "").strip()
     max_results = int(args.get("max_results") or 3)
     if not query:
@@ -753,7 +839,6 @@ def _exec_arxiv_search(args: dict) -> dict:
         url = f"http://export.arxiv.org/api/query?search_query=all:{urllib.parse.quote(query)}&max_results={max_results}"
         resp = requests.get(url, timeout=8)
         
-        # Parse XML results using simple regex matching to avoid bs4 xml dependencies
         xml_text = resp.text
         entries = []
         entry_blocks = re.findall(r'<entry>([\s\S]*?)<\/entry>', xml_text)
@@ -782,6 +867,7 @@ def _exec_arxiv_search(args: dict) -> dict:
 
 
 def _exec_image_search(args: dict) -> dict:
+    """寻找精美图片推荐。"""
     query = str(args.get("query") or "").strip()
     count = int(args.get("count") or 3)
     if not query:
@@ -796,6 +882,7 @@ def _exec_image_search(args: dict) -> dict:
 
 
 def _exec_news_search(args: dict) -> dict:
+    """新闻头条获取。"""
     category = str(args.get("category") or "tech").strip().lower()
     tech_news = [
         {"title": "OpenAI 宣布推出全新一代智能体操作系统", "source": "极客公园", "time": "1小时前"},
@@ -811,6 +898,7 @@ def _exec_news_search(args: dict) -> dict:
 
 
 def _exec_qr_generator(args: dict) -> dict:
+    """生成二维码图片。"""
     text = str(args.get("text") or "").strip()
     size = str(args.get("size") or "200x200").strip()
     if not text:
@@ -821,6 +909,7 @@ def _exec_qr_generator(args: dict) -> dict:
 
 
 def _exec_currency_converter(args: dict) -> dict:
+    """国际实时汇率折算。"""
     from_curr = str(args.get("from_currency") or "USD").strip().upper()
     to_curr = str(args.get("to_currency") or "CNY").strip().upper()
     amount = float(args.get("amount") or 1.0)
@@ -847,6 +936,7 @@ def _exec_currency_converter(args: dict) -> dict:
 
 
 def _exec_ip_lookup(args: dict) -> dict:
+    """IP 归属地物理定位。"""
     ip = str(args.get("ip") or "").strip()
     try:
         url = f"http://ip-api.com/json/{ip}"
@@ -868,6 +958,7 @@ def _exec_ip_lookup(args: dict) -> dict:
 
 
 def _exec_url_shortener(args: dict) -> dict:
+    """短网址生成。"""
     url = str(args.get("url") or "").strip()
     if not url:
         return {"content": json.dumps({"error": "URL cannot be empty"}), "result_preview": "Error: Empty URL"}
@@ -883,6 +974,7 @@ def _exec_url_shortener(args: dict) -> dict:
 
 
 def _exec_weather_lookup(args: dict) -> dict:
+    """实时天气查询。"""
     city = str(args.get("city") or "Shanghai").strip()
     try:
         url = f"https://wttr.in/{urllib.parse.quote(city)}?format=j1"
@@ -903,6 +995,7 @@ def _exec_weather_lookup(args: dict) -> dict:
 
 
 def _exec_horoscope(args: dict) -> dict:
+    """星座每日运势。"""
     sign = str(args.get("sign") or "白羊座").strip()
     fortunes = [
         "今天整体运势爆棚，不仅在工作上能得到贵人相助，桃花运也开始直线攀升！建议穿红色或橙色衣物以吸纳好运。",
@@ -914,6 +1007,7 @@ def _exec_horoscope(args: dict) -> dict:
 
 
 def _exec_joke_generator(args: dict) -> dict:
+    """随机冷笑话推荐。"""
     jokes = [
         {"setup": "为什么电脑永远吃不饱？", "punchline": "因为它们总是吃比特（Bytes）！"},
         {"setup": "什么动物最爱问为什么？", "punchline": "是八哥（Bug），因为大模型程序里天天全是它！"}
@@ -923,6 +1017,7 @@ def _exec_joke_generator(args: dict) -> dict:
 
 
 def _exec_advice_slip(args: dict) -> dict:
+    """心灵树洞。"""
     advices = [
         "永远不要在愤怒时做决定，等半个小时后再说。",
         "大自然是最好的解药。当你感到心烦意乱时，出门散步 15 分钟会产生奇迹。",
@@ -933,6 +1028,7 @@ def _exec_advice_slip(args: dict) -> dict:
 
 
 def _exec_bored_activity(args: dict) -> dict:
+    """对抗无聊点子推荐。"""
     activities = [
         {"activity": "尝试画一幅极简的简笔自画像，并写上一句激励自己的话", "type": "recreation"},
         {"activity": "整理一下电脑桌面和书桌，把不需要的东西全部扔掉，感受断舍离", "type": "organization"},
@@ -943,19 +1039,21 @@ def _exec_bored_activity(args: dict) -> dict:
 
 
 def _exec_password_generator(args: dict) -> dict:
+    """密码高安全生成器。"""
     length = int(args.get("length") or 12)
     if length < 4:
         length = 4
     elif length > 128:
         length = 128
     chars = string.ascii_letters + string.digits + "!@#$%^&*"
-    # Use cryptographically secure randomness for password generation
+    # 🛡️ 安全设计：利用加密安全随机发生器（secrets.choice），保障密码绝对无法被统计预测。
     import secrets as _secrets
     pwd = "".join(_secrets.choice(chars) for _ in range(length))
     return {"content": json.dumps({"password": pwd}), "result_preview": pwd}
 
 
 def _exec_uuid_generator(args: dict) -> dict:
+    """UUID4 标识符序列生成。"""
     count = int(args.get("count") or 1)
     if count < 1:
         count = 1
@@ -966,6 +1064,7 @@ def _exec_uuid_generator(args: dict) -> dict:
 
 
 def _exec_diff_checker(args: dict) -> dict:
+    """文本精准差异对比。"""
     t1 = str(args.get("text1") or "")
     t2 = str(args.get("text2") or "")
     import difflib
@@ -975,6 +1074,7 @@ def _exec_diff_checker(args: dict) -> dict:
 
 
 def _exec_character_counter(args: dict) -> dict:
+    """文本指标测算统计。"""
     text = str(args.get("text") or "")
     chars = len(text)
     words = len(text.split())
@@ -984,27 +1084,47 @@ def _exec_character_counter(args: dict) -> dict:
 
 
 def _execute_http_tool(tool: Tool, context: dict) -> dict:
+    """
+    通用自定义 HTTP 工具沙箱沙盒执行引擎。
+
+    🎯 意图与工程大局观：
+        为大模型赋能以发起真实的外部 HTTP 请求，打通“工具调度（Function Calling）”流转。
+        包含完整的参数 schema 组装映射、Query/Bearer 鉴权密钥注入解密、SSRF 私网 IP 安全拦截阻断、
+        大报文截断保护以及 DNS 固化寻址拦截。
+    """
+    # 1. 固化寻址与 SSRF 阻断
     validated_ip = _validate_safe_https_url(tool.url)
     parsed_host = urllib.parse.urlparse(tool.url).hostname
     input_data = _dict_value(context.get("input"))
     body = context.get("body")
+    
+    # 2. 构造查询参数与 API_KEY 注入
     query = _query_params(tool.query_schema or {}, input_data)
     if tool.auth_type == "query" and tool.encrypted_secret:
         query_name = tool.auth_query_name or "api_key"
         query[query_name] = decrypt_api_key(tool.encrypted_secret)
     url = _url_with_query(tool.url, query)
+    
+    # 3. 构造 Headers
     headers = _headers(tool, input_data)
+    
+    # 4. 构造 Body
     data = None
     if tool.method in {"POST", "PUT", "PATCH"}:
         data = json.dumps(body if body is not None else _body_from_schema(tool.body_schema or {}, input_data)).encode("utf-8")
         headers.setdefault("Content-Type", "application/json")
+        
     request = urllib.request.Request(url, data=data, headers=headers, method=tool.method)
     started = time.monotonic()
+    
+    # 5. 执行请求并截断保护
     try:
+        # 利用 dns_pinned 阻断 DNS 重绑定
         with dns_pinned(parsed_host, validated_ip):
             with urllib.request.urlopen(request, timeout=tool.timeout_seconds) as response:
                 content_type = response.headers.get("Content-Type", "")
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
+                # 🛡️ 边界防线：超出限制拒绝读取，杜绝内存爆满
                 if len(raw) > MAX_RESPONSE_BYTES:
                     raise ValueError("Tool response is too large")
                 text = raw.decode("utf-8", errors="replace")
@@ -1027,6 +1147,12 @@ def _execute_http_tool(tool: Tool, context: dict) -> dict:
 
 
 def _validate_safe_https_url(url: str) -> str:
+    """
+    🛡️ HTTP 工具外部请求安全审计关哨（SSRF 第 1 阶段防线）。
+    - 强制限制必须使用 HTTPS 协议，保障密钥传输在链路层的机密性，拒绝不安全的 HTTP。
+    - 验证 Hostname 不属于环回域名或谷歌云/AWS 的元数据接口。
+    - 提取 IP 或解析 IP，调用 `_reject_ip` 强制排除所有的私网网段与环回网段。
+    """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("HTTP tools require an HTTPS URL")
@@ -1046,11 +1172,17 @@ def _validate_safe_https_url(url: str) -> str:
 
 
 def _reject_ip(ip: ipaddress._BaseAddress) -> None:
+    """
+    🛡️ 高精度的内网私有 IP 范围审计过滤哨兵（SSRF 终极防线）。
+    涵盖 IPv4/IPv6 环回地址、私有局域网网段（如 10.x、172.16.x、192.168.x）、
+    链路本地多播网段及云原生元数据主机范围。
+    """
     if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or str(ip) in CLOUD_METADATA_HOSTS:
         raise ValueError("HTTP tool target is blocked")
 
 
 def _headers(tool: Tool, input_data: dict) -> dict:
+    """解析并构造出请求 Headers，自动附加 Bearer/Header 类型的安全解密授权凭证。"""
     headers = {key: str(input_data.get(key, "")) for key in (tool.headers_schema or {}) if input_data.get(key) is not None}
     if tool.auth_type in {"bearer", "header"} and tool.encrypted_secret:
         secret = decrypt_api_key(tool.encrypted_secret)
@@ -1060,6 +1192,9 @@ def _headers(tool: Tool, input_data: dict) -> dict:
 
 
 def _query_params(schema: dict, input_data: dict) -> dict:
+    """
+    🛡️ 强参数校验：组装 URL 查询参数并校验 required 必填约束，不符要求直接打断。
+    """
     params = {key: input_data.get(key) for key in schema if input_data.get(key) is not None}
     for key, spec in schema.items():
         if isinstance(spec, dict) and spec.get("required") and key not in params:
@@ -1068,10 +1203,14 @@ def _query_params(schema: dict, input_data: dict) -> dict:
 
 
 def _body_from_schema(schema: dict, input_data: dict) -> dict:
+    """映射构造 POST Body。"""
     return {key: input_data.get(key) for key in schema if input_data.get(key) is not None}
 
 
 def _url_with_query(url: str, params: dict) -> str:
+    """
+    将生成的 query 字典优雅拼接在 url 尾部，智能保留并合并原 URL 的既有参数。
+    """
     parsed = urllib.parse.urlparse(url)
     query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
     query.update({key: str(value) for key, value in params.items() if value is not None})
@@ -1107,6 +1246,9 @@ def _search_query(context: dict) -> str:
 
 
 def _tool_name_exists(db: Session, *, workspace_id: int | None, user_id: int | None, name: str) -> bool:
+    """
+    高效判断同名自定义工具是否已在此租户中存在。
+    """
     return (
         db.query(Tool.id)
         .filter(
@@ -1120,7 +1262,9 @@ def _tool_name_exists(db: Session, *, workspace_id: int | None, user_id: int | N
 
 
 def tool_schema_for_llm(tool: Tool) -> dict:
-    """Convert a Tool into an OpenAI function-calling JSON Schema."""
+    """
+    将本系统的 Tool 映射为 OpenAI 官方格式的 function-calling JSON Schema。
+    """
     return {
         "type": "function",
         "function": {
@@ -1132,6 +1276,9 @@ def tool_schema_for_llm(tool: Tool) -> dict:
 
 
 def _tool_parameters_schema(tool: Tool) -> dict:
+    """
+    构建工具参数的 JSON Schema，提取 query 和 body schemas 并完美融合成 OpenAI 的 `parameters` 对象。
+    """
     if tool.type == "builtin":
         impl = BUILTIN_TOOLS.get(tool.name)
         if impl:
@@ -1170,11 +1317,13 @@ def _tool_parameters_schema(tool: Tool) -> dict:
     return {
         "type": "object",
         "properties": properties,
+        # 🧠 魔鬼数字：最多暴露 10 个必填字段给 LLM，防止 Schema 过于复杂导致大模型参数理解崩坏
         "required": required[:10],
     }
 
 
 def _error_code(message: str) -> str:
+    """异常文案转化为工程异常代码。"""
     if "HTTPS" in message:
         return "https_required"
     if "blocked" in message:

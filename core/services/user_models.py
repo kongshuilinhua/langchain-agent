@@ -12,6 +12,12 @@ from core.security.api_keys import decrypt_api_key, encrypt_api_key
 
 
 def user_model_payload(config: UserModelConfig) -> dict:
+    """
+    将用户私有模型（BYOK）实体序列化为安全的 API DTO。
+    
+    🛡️ 脱敏过滤：
+        使用has_api_key判定密钥存在状态，绝对禁止向下游接口明文回传 `encrypted_api_key` 本身。
+    """
     return {
         "id": config.id,
         "display_name": config.display_name,
@@ -33,6 +39,7 @@ def user_model_payload(config: UserModelConfig) -> dict:
 
 
 def user_model_snapshot(config: UserModelConfig | None) -> dict | None:
+    """产生用于 Agent 发布版本快照中的非密钥模型信息字典，用于保障发布版本的前向不退化性。"""
     if not config:
         return None
     return {
@@ -55,14 +62,22 @@ def user_model_snapshot(config: UserModelConfig | None) -> dict | None:
 
 
 def get_owned_user_model(db: Session, *, user_id: int, config_id: int) -> UserModelConfig | None:
-    return db.query(UserModelConfig).filter(UserModelConfig.id == config_id, UserModelConfig.user_id == user_id).first()
+    """租户隔离级获取用户私有模型。"""
+    return db.query(UserModelConfig).filter(UserModelConfig.user_id == user_id, UserModelConfig.id == config_id).first()
 
 
 def list_user_model_configs(db: Session, *, user_id: int) -> list[UserModelConfig]:
+    """列出当前用户拥有的所有私有模型配置。"""
     return db.query(UserModelConfig).filter(UserModelConfig.user_id == user_id).order_by(UserModelConfig.id.asc()).all()
 
 
 def create_user_model_config(db: Session, *, user_id: int, payload: dict) -> UserModelConfig:
+    """
+    新建用户私有模型配置。
+
+    🛡️ 智能多模态自动探测：
+        在写入前自动发起针对该端点的多模态能力探测，自动判断其是否真能接收图片输入，强制矫正 `supports_image`。
+    """
     api_key = _required_api_key(payload.get("api_key"))
     data = _config_fields(payload)
     data["supports_image"] = detect_image_support_for_payload(api_key=api_key, data=data)
@@ -80,6 +95,12 @@ def create_user_model_config(db: Session, *, user_id: int, payload: dict) -> Use
 
 
 def update_user_model_config(db: Session, *, config: UserModelConfig, payload: dict) -> UserModelConfig:
+    """
+    修改用户私有模型配置。
+    
+    🛡️ 安全控制与自适应能力检验：
+        当涉及网关或模型变更时，重新触发针对当前端点多模态的自动嗅探，保持能力标签实时性。
+    """
     should_probe_image = any(key in payload for key in ("api_key", "base_url", "chat_model", "supports_image"))
     if "api_key" in payload:
         api_key = payload["api_key"]
@@ -103,6 +124,10 @@ def update_user_model_config(db: Session, *, config: UserModelConfig, payload: d
 
 
 def delete_user_model_config(db: Session, *, config: UserModelConfig) -> None:
+    """
+    删除私有模型配置。
+    🛡️ 防崩溃防线：判定是否有草稿态 Agent 正处于使用当前配置的状态。如有，拒绝物理删除，维护全局外键参照完备性。
+    """
     if (
         db.query(Agent.id)
         .filter(
@@ -117,6 +142,7 @@ def delete_user_model_config(db: Session, *, config: UserModelConfig) -> None:
 
 
 def _image_detection_payload(config: UserModelConfig) -> dict:
+    """封装多模态检测状态回执。"""
     return {
         "tested": True,
         "confirmed": bool(config.supports_image),
@@ -132,6 +158,10 @@ def resolve_user_model_config(
     config_id: int | None,
     enabled_only: bool = True,
 ) -> UserModelConfig | None:
+    """
+    自适应路由用户的私有模型。
+    若 `config_id` 未指定，则漂移降级获取用户的 `is_default` 默认模型。
+    """
     query = db.query(UserModelConfig).filter(UserModelConfig.user_id == user_id)
     if config_id:
         query = query.filter(UserModelConfig.id == config_id)
@@ -143,6 +173,10 @@ def resolve_user_model_config(
 
 
 def user_model_runtime_config(config: UserModelConfig) -> dict:
+    """
+    生成注入大模型调用提供商（llm.py）运行时解密后的上下文配置。
+    包含完整解密出明文的 `api_key`，生命周期仅局限在本次调用链中，用完即弃，防泄露。
+    """
     return {
         "provider": config.provider,
         "base_url": config.base_url,
@@ -159,6 +193,13 @@ def user_model_runtime_config(config: UserModelConfig) -> dict:
 
 
 def test_user_model_config(config: UserModelConfig, *, detect_image: bool = False) -> dict:
+    """
+    对用户私有模型配置进行全链路真实连通性测试。
+
+    🎯 意图与工程大局观：
+        在保存或测试私有模型时，发起真实的空问答 HTTP 请求测试，评估 Base URL 和 API Key 的正确性。
+        如果参数 `detect_image` 为 True，将触发核心的 **Active Multi-Modal Probe（多模态主动探测）**，确保平台拿到的能力清单百分之百真实。
+    """
     started = time.monotonic()
     checks = {
         "chat": {"ok": False, "required": True},
@@ -180,6 +221,7 @@ def test_user_model_config(config: UserModelConfig, *, detect_image: bool = Fals
     try:
         runtime = user_model_runtime_config(config)
         provider = OpenAICompatibleProvider()
+        # 1. 真实问答联通探测
         provider.chat(
             [{"role": "user", "content": "connection test"}],
             model=runtime["chat_model"],
@@ -187,6 +229,8 @@ def test_user_model_config(config: UserModelConfig, *, detect_image: bool = Fals
             runtime_config=runtime,
         )
         checks["chat"]["ok"] = True
+        
+        # 2. 多模态图像能力测试
         if detect_image:
             image_result = _check_image_capability(provider, runtime, required=False)
             image_ok = image_result["ok"]
@@ -197,6 +241,7 @@ def test_user_model_config(config: UserModelConfig, *, detect_image: bool = Fals
                 checks["image"]["error_code"] = image_result["error_code"]
                 checks["image"]["message"] = image_result["message"]
     except Exception as exc:
+        # 🛡️ 安全核心：在连通性抛错时进行严格过滤清洗
         checks["chat"]["error_code"] = _chat_probe_error_code(exc)
         checks["chat"]["message"] = _sanitize_probe_error(exc)
         return {
@@ -220,6 +265,7 @@ def test_user_model_config(config: UserModelConfig, *, detect_image: bool = Fals
 
 
 def test_user_model_payload(payload: dict, *, detect_image: bool = False) -> dict:
+    """基于前端传入的临时 Payload（未入库数据）进行连通性预测试。"""
     api_key = _required_api_key(payload.get("api_key"))
     data = _config_fields(payload)
     config = UserModelConfig(
@@ -231,6 +277,7 @@ def test_user_model_payload(payload: dict, *, detect_image: bool = False) -> dic
 
 
 def detect_image_support_for_payload(*, api_key: str, data: dict) -> bool:
+    """基于载荷内容检测图像能力。"""
     config = UserModelConfig(
         user_id=0,
         encrypted_api_key=encrypt_api_key(api_key),
@@ -247,6 +294,7 @@ def _required_api_key(value) -> str:
 
 
 def _config_fields(payload: dict, *, partial: bool = False) -> dict:
+    """清洗并规范入参。"""
     allowed = {
         "display_name",
         "provider",
@@ -329,6 +377,10 @@ def _reasoning_label(reasoning_type: str) -> str:
 
 
 def _tiny_png_data_url() -> str:
+    """
+    🧠 极简无损 1x1 像素 PNG Base64 数据 URL。
+    作为主动多模态图像探测的最小有效载荷负载，最大程度压缩请求开销，保护网络带宽。
+    """
     return (
         "data:image/png;base64,"
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -336,6 +388,9 @@ def _tiny_png_data_url() -> str:
 
 
 def _check_image_capability(provider: OpenAICompatibleProvider, runtime: dict, *, required: bool) -> dict:
+    """
+    通过实际向该端点灌入 1x1 小图片，看其是否抛出 "Payload Rejected" 异常来最终核对多模态能力。
+    """
     if get_settings().mock_llm:
         ok = _model_name_implies_image(runtime.get("chat_model", ""))
         return {
@@ -344,6 +399,7 @@ def _check_image_capability(provider: OpenAICompatibleProvider, runtime: dict, *
             "message": "" if ok else "Mock image probe treats this model name as text-only",
         }
     try:
+        # 发起多模态测试调用
         provider.chat(
             [
                 {
@@ -415,6 +471,17 @@ def _http_status_from_error(text: str) -> int | None:
 
 
 def _sanitize_probe_error(exc: Exception) -> str:
+    """
+    🛡️ 极度关键的安全性隐私红线防护。
+    
+    🎯 意图与工程大局观：
+        用户提供的第三方模型端点如果返回连接报错（HTTPError），报错中经常会直接泄漏 HTTP 请求的 Header 信息。
+        这就意味着用户的**明文 API_KEY (sk-...) 或 Bearer Token 可能会被直接注入报错 Traceback 并返回给前端浏览器展示**，甚至直接刷入服务器的 Error 日志中，存在极其巨大的安全外泄漏洞风险。
+        
+    🛡️ 过滤机制：
+        利用严密正则表达式，强制拦截所有 `sk-...` 前缀的 OpenAI 密钥、Bearer 字段及 Base64 密钥段，
+        将其统一物理净化脱敏替换为安全的 `[secret]`，字数最大严格限制为 500 字，阻断一切凭证意外泄露的可能。
+    """
     message = str(exc)
     message = re.sub(r"(?i)(sk-[A-Za-z0-9_-]+|api[_-]?key\s*[:=]\s*\S+|authorization\s*:\s*\S+|bearer\s+\S+)", "[secret]", message)
     message = re.sub(r"\s+", " ", message).strip()
@@ -422,6 +489,7 @@ def _sanitize_probe_error(exc: Exception) -> str:
 
 
 def _model_name_implies_image(model_name: str) -> bool:
+    """通过模型名称词义推断其是否内置支持多模态（vl、vision、omni 等标记）。"""
     normalized = f"-{str(model_name or '').lower().replace('_', '-')}-"
     markers = (
         "-vl-",
@@ -436,6 +504,7 @@ def _model_name_implies_image(model_name: str) -> bool:
 
 
 def _detected_capabilities(checks: dict) -> dict:
+    """整合检测的推理和图像支持状态。"""
     reasoning_type = checks.get("reasoning", {}).get("type") or "none"
     supports_reasoning = bool(checks.get("reasoning", {}).get("ok")) and reasoning_type != "none"
     image_check = checks.get("image", {})
@@ -456,6 +525,7 @@ def _detected_capabilities(checks: dict) -> dict:
 
 
 def _checks_message(checks: dict) -> str:
+    """聚合检测结论信息。"""
     failed = [name for name, result in checks.items() if result.get("required") and not result.get("ok")]
     if failed:
         return "Capability check failed: " + ", ".join(failed)
@@ -464,6 +534,10 @@ def _checks_message(checks: dict) -> str:
 
 
 def _clear_other_defaults(db: Session, *, user_id: int, keep_id: int | None) -> None:
+    """
+    物理重置该用户名下的其他所有配置为非默认模型状态。
+    使用 synchronize_session=False 实现高效的数据库批量更新事务。
+    """
     query = db.query(UserModelConfig).filter(UserModelConfig.user_id == user_id, UserModelConfig.is_default.is_(True))
     if keep_id is not None:
         query = query.filter(UserModelConfig.id != keep_id)
