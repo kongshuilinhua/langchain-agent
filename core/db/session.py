@@ -5,14 +5,34 @@ from core.config import get_settings
 from core.db.base import Base
 
 
+# 🎯 全局配置解析：加载平台配置单例
 settings = get_settings()
+
+# 🎯 数据库连接引擎引擎初始化
+# future=True 启用 SQLAlchemy 2.0 兼容模式，保证查询接口的前向兼容性
 engine = create_engine(settings.database_url, future=True)
 
-
+# 🎯 会话工厂声明 (Thread-local Session Local)
+# autoflush=False: 禁用自动提交缓冲区，防止未显式 commit 的修改提前落库，有利于事务边界控制
+# autocommit=False: 显式事务控制，必须通过 db.commit() 提交，防止隐式事务泄漏
+# future=True: 使用 2.0 时代的会话模式
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
 def init_db() -> None:
+    """
+    平台数据库自举初始化函数。
+
+    🎯 工作流生命周期：
+        1. 导入模型定义确保所有 SQLAlchemy 模型被 Base.metadata 收集。
+        2. 基于 Base.metadata.create_all 执行物理建表（若表已存在则跳过）。
+        3. 调用兼容性迁移脚本 `_run_compat_migrations` 处理数据库增量 schema 更新。
+        4. 初始化自举内置的基础 LLM/Embeddings 模型配置。
+
+    🛡️ 容错设计：
+        使用 try-finally 确保即使内置模型配置自举失败（例如 API_KEY 配置问题），
+        本地数据库 Session 也能被安全关闭，防止连接泄露。
+    """
     from core.db import models  # noqa: F401
     from core.services.bootstrap import ensure_default_models
 
@@ -26,6 +46,18 @@ def init_db() -> None:
 
 
 def _run_compat_migrations() -> None:
+    """
+    🛡️ 防御性轻量级增量迁移机制。
+
+    🎯 设计决策：
+        为什么不使用 Alembic 而是通过原生 DDL 进行运行时 schema 校验？
+        - 内部测试或私有化部署场景下，开发者/客户不需要配置和运行复杂的数据库迁移命令。
+        - 运行时进行 schema 检测，实现“开箱即用”式自动升级，显著降低系统运维门槛。
+
+    ⚡ 边界与性能思考：
+        - 优先通过 `inspect(engine)` 加载元数据进行表结构判断，避免直接抛出 SQL 执行异常再捕捉，大幅减少 I/O 损耗。
+        - 所有 DDL 操作包装在 `engine.begin()` 上下文管理器中，利用数据库事务保证 Schema 修改的原子性，防止中途断电导致表结构损坏。
+    """
     inspector = inspect(engine)
     if "users" not in inspector.get_table_names():
         return
@@ -325,6 +357,17 @@ def _run_compat_migrations() -> None:
 
 
 def get_db():
+    """
+    FastAPI 依赖注入专用的数据库 Session 生成器。
+
+    🎯 意图与工程大局观：
+        本函数被设计为依赖注入函数（Dependency Injection Component），在 API 端点执行前
+        自动从连接池拉取连接，并开启逻辑会话事务。
+
+    🛡️ 防御性编程：
+        采用 try-finally 控制块，无论 API 端点在处理业务逻辑时是否抛出未捕获的错误，
+        最终一定会显式执行 `db.close()`，回收物理连接至连接池，杜绝高并发环境下的“连接池枯竭”故障。
+    """
     db = SessionLocal()
     try:
         yield db
@@ -333,9 +376,16 @@ def get_db():
 
 
 def _ensure_columns(table_name: str, columns: dict[str, str]) -> None:
+    """
+    内部辅助方法：确保目标表存在指定的列，如缺失则自动通过 ALTER TABLE 注入。
+
+    🛡️ 防御性设计：
+        通过在添加前读取已有表结构缓存，避免重复执行 DDL 产生数据库层面的 Unique/Duplicate Column 物理异常。
+    """
     existing = {column["name"] for column in inspect(engine).get_columns(table_name)}
     for column_name, ddl in columns.items():
         if column_name in existing:
             continue
         with engine.begin() as connection:
             connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
+
