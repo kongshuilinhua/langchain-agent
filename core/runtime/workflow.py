@@ -364,8 +364,15 @@ class WorkflowRunner:
             total_calls = 0
             tools_used: list[str] = []
             events = []
+            max_tool_calls = 20
+            max_tool_wall_time = 120  # seconds
+            tool_loop_start = time.monotonic()
 
             for _round in range(8):
+                if total_calls >= max_tool_calls:
+                    break
+                if time.monotonic() - tool_loop_start > max_tool_wall_time:
+                    break
                 response = self.provider.chat(
                     messages,
                     model=agent.model,
@@ -382,7 +389,11 @@ class WorkflowRunner:
                 if response.tool_calls:
                     assistant_msg = {"role": "assistant", "content": response.content, "tool_calls": response.tool_calls}
                     messages.append(assistant_msg)
-                    for tc in response.tool_calls:
+                    # Limit tool_calls per round to remaining budget
+                    calls_this_round = response.tool_calls[:max_tool_calls - total_calls]
+                    for tc in calls_this_round:
+                        if time.monotonic() - tool_loop_start > max_tool_wall_time:
+                            break
                         func = tc["function"]
                         tool_name = func["name"]
                         try:
@@ -452,6 +463,19 @@ class WorkflowRunner:
         thinking_msgs = self._thinking_messages(context)
         if thinking_msgs:
             thinking_blocks = [msg["content"] for msg in thinking_msgs]
+            
+        raw_summary = context.get('memory_summary') or ''
+        formatted_summary = "无"
+        if raw_summary.strip():
+            try:
+                turns = json.loads(raw_summary)
+                if isinstance(turns, list):
+                    formatted_summary = "\n".join(f"用户：{t['user']}\n助手：{t['assistant']}" for t in turns)
+                else:
+                    formatted_summary = raw_summary
+            except Exception:
+                formatted_summary = raw_summary
+                
         system_parts = [
             agent.system_prompt or "你是一个自定义智能体。",
             *thinking_blocks,
@@ -459,11 +483,15 @@ class WorkflowRunner:
             f"可用知识片段：\n{source_text or '无'}",
             f"工具输出：\n{tool_text or '无'}",
             f"用户变量：\n{variable_text or '无'}",
-            f"会话记忆摘要：\n{context.get('memory_summary') or '无'}",
+            f"会话记忆摘要：\n{formatted_summary}",
             f"本轮附件上下文：\n{attachment_text or '无'}",
             f"Long-term Agent memory:\n{context.get('profile_memory') or 'None'}",
         ]
         system_content = "\n\n".join(part for part in system_parts if part.strip())
+        # Guard against token overflow: truncate overly long system prompts
+        max_system_chars = 100_000  # ~50k tokens, safe for most model context windows
+        if len(system_content) > max_system_chars:
+            system_content = system_content[:max_system_chars] + "\n\n[上下文已截断以避免超出模型上下文窗口限制]"
         return [
             {"role": "system", "content": system_content},
             {"role": "user", "content": self._user_content(context["input"], context.get("uploads", []))},
@@ -727,6 +755,42 @@ class WorkflowRunner:
             memory = SessionMemory(session_id=session_id, summary="", message_count=0)
             self.db.add(memory)
         memory.message_count += 2
-        seed = f"{memory.summary}\n用户：{user_message}\n助手：{answer}".strip()
-        lines = [line for line in seed.splitlines() if line.strip()]
-        memory.summary = "\n".join(lines[-max_messages:])[:1200]
+        
+        # Try parsing structured dialogue turns
+        try:
+            dialogue_turns = json.loads(memory.summary) if memory.summary else []
+            if not isinstance(dialogue_turns, list):
+                dialogue_turns = []
+        except Exception:
+            # Fallback: parse legacy plain text formatted summary
+            dialogue_turns = []
+            if memory.summary.strip():
+                raw_turns = memory.summary.split("\n===\n")
+                for turn_text in raw_turns:
+                    if "助手：" in turn_text:
+                        parts = turn_text.split("助手：", 1)
+                        u_part = parts[0].replace("用户：", "").strip()
+                        a_part = parts[1].strip()
+                        dialogue_turns.append({"user": u_part, "assistant": a_part})
+
+        # Append current dialogue turn
+        dialogue_turns.append({
+            "user": user_message.strip(),
+            "assistant": answer.strip()
+        })
+        
+        # max_messages represents dialogue turns (one turn has user + assistant, so max_turns = max_messages // 2)
+        max_turns = max(1, max_messages // 2)
+        truncated_turns = dialogue_turns[-max_turns:]
+        
+        # Re-serialize to JSON summary
+        serialized = json.dumps(truncated_turns, ensure_ascii=False)
+        # Limit token usage for extra long assistant codes/texts
+        if len(serialized) > 2000:
+            for turn in truncated_turns:
+                if len(turn["assistant"]) > 500:
+                    turn["assistant"] = turn["assistant"][:500] + "...(此回答过长已截断)..."
+            serialized = json.dumps(truncated_turns, ensure_ascii=False)
+            
+        memory.summary = serialized
+

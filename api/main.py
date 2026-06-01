@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import secrets
 import time
+from datetime import datetime, timezone
 from collections.abc import Iterable
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -179,6 +181,11 @@ app.add_middleware(
 @app.on_event("startup")
 def startup() -> None:
     global startup_error
+    if settings.jwt_secret == "change-me-in-production":
+        logger.warning(
+            "SECURITY WARNING: JWT_SECRET is using the insecure default value. "
+            "Set a strong random secret via the JWT_SECRET environment variable."
+        )
     try:
         init_db()
         startup_error = None
@@ -399,7 +406,7 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
         db.add(user)
         db.flush()
         db.add(WorkspaceMember(workspace_id=invite.workspace_id, user_id=user.id, role=normalize_role(invite.role)))
-        invite.accepted_at = __import__("datetime").datetime.utcnow()
+        invite.accepted_at = datetime.now(timezone.utc)
         db.commit()
         workspace = invite_workspace(db, invite.workspace_id)
         role = normalize_role(invite.role)
@@ -508,7 +515,7 @@ def accept_invite(request: InviteAcceptRequest, current_user: User = Depends(get
     existing = db.query(WorkspaceMember).filter(WorkspaceMember.workspace_id == invite.workspace_id, WorkspaceMember.user_id == current_user.id).first()
     if not existing:
         db.add(WorkspaceMember(workspace_id=invite.workspace_id, user_id=current_user.id, role=normalize_role(invite.role)))
-    invite.accepted_at = __import__("datetime").datetime.utcnow()
+    invite.accepted_at = datetime.now(timezone.utc)
     db.commit()
     return {"accepted": True}
 

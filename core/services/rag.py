@@ -19,6 +19,14 @@ from core.services.rag_cache import redis_store
 
 BM25_BATCH_SIZE = 1000
 
+import threading
+
+# Thread-safe global cache for compiled BM25 indices
+# Key: (frozenset(knowledge_base_ids), version_hash) -> Value: (compiled_bm25_index, rows_data)
+_BM25_INDEX_CACHE = {}
+_BM25_CACHE_LOCK = threading.Lock()
+
+
 
 @dataclass
 class RagResult:
@@ -145,39 +153,86 @@ def _dense_search(*, workspace_id: int, knowledge_base_ids: list[int], query_vec
 
 
 def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int], query: str, limit: int) -> list[dict]:
-    query_chunks = (
-        db.query(KnowledgeChunk)
-        .filter(
-            KnowledgeChunk.workspace_id == workspace_id,
-            KnowledgeChunk.knowledge_base_id.in_(knowledge_base_ids)
+    # Calculate the exact version hash representing the state of all KBs
+    stats = (
+        db.query(
+            KnowledgeDocument.knowledge_base_id,
+            func.count(KnowledgeDocument.id),
+            func.max(KnowledgeDocument.updated_at),
         )
+        .filter(KnowledgeDocument.knowledge_base_id.in_(knowledge_base_ids))
+        .group_by(KnowledgeDocument.knowledge_base_id)
+        .all()
     )
+    parts = [f"{kb_id}:{count}:{max_updated.isoformat() if max_updated else '0'}" for kb_id, count, max_updated in sorted(stats, key=lambda x: x[0])]
+    version = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
     
-    total_count = query_chunks.count()
-    if total_count == 0:
-        return []
-        
-    rows_data = []
-    tokenized_corpus = []
+    cache_key = (frozenset(knowledge_base_ids), version)
     
-    # 批量载入以避免单次消耗海量内存，并在载入后立即提取轻量字段以释放 SQLAlchemy 重型对象
-    for offset in range(0, total_count, BM25_BATCH_SIZE):
-        batch = query_chunks.order_by(KnowledgeChunk.id.asc()).offset(offset).limit(BM25_BATCH_SIZE).all()
-        for row in batch:
-            tokens = _tokenize(row.text)
-            tokenized_corpus.append(tokens)
-            rows_data.append({
-                "id": row.chunk_id or row.vector_id,
-                "vector_id": row.vector_id,
-                "text": row.text,
-                "metadata": _row_metadata(row),
-                "tokens": tokens
-            })
-        # 释放 SQLAlchemy Session 中的这一批重型缓存对象
-        db.expire_all()
+    # Try fetching from global memory cache
+    with _BM25_CACHE_LOCK:
+        cached_data = _BM25_INDEX_CACHE.get(cache_key)
         
+    if cached_data:
+        bm25_index, rows_data = cached_data
+    else:
+        # Retrieve all chunks and build index
+        query_chunks = (
+            db.query(KnowledgeChunk)
+            .filter(
+                KnowledgeChunk.workspace_id == workspace_id,
+                KnowledgeChunk.knowledge_base_id.in_(knowledge_base_ids)
+            )
+        )
+        total_count = query_chunks.count()
+        if total_count == 0:
+            return []
+            
+        rows_data = []
+        tokenized_corpus = []
+        
+        for offset in range(0, total_count, BM25_BATCH_SIZE):
+            batch = query_chunks.order_by(KnowledgeChunk.id.asc()).offset(offset).limit(BM25_BATCH_SIZE).all()
+            for row in batch:
+                meta = row.metadata_ or {}
+                tokens = meta.get("tokens")
+                if tokens is None:
+                    tokens = _tokenize(row.text)
+                tokenized_corpus.append(tokens)
+                rows_data.append({
+                    "id": row.chunk_id or row.vector_id,
+                    "vector_id": row.vector_id,
+                    "text": row.text,
+                    "metadata": _row_metadata(row),
+                    "tokens": tokens
+                })
+            db.expire_all()
+            
+        # Compile the BM25 index
+        try:
+            from rank_bm25 import BM25Okapi
+            bm25_index = BM25Okapi(tokenized_corpus)
+        except Exception:
+            bm25_index = None
+            
+        # Store compiled index in the global memory cache
+        with _BM25_CACHE_LOCK:
+            # Evict old cache items to control memory usage
+            if len(_BM25_INDEX_CACHE) > 100:
+                _BM25_INDEX_CACHE.clear()
+            _BM25_INDEX_CACHE[cache_key] = (bm25_index, rows_data)
+    
     tokenized_query = _tokenize(query)
-    scores = _bm25_scores(tokenized_corpus, tokenized_query)
+    
+    # Calculate BM25 scores
+    if bm25_index:
+        try:
+            scores = [float(s) for s in bm25_index.get_scores(tokenized_query)]
+        except Exception:
+            scores = _bm25_scores([r["tokens"] for r in rows_data], tokenized_query)
+    else:
+        scores = _bm25_scores([r["tokens"] for r in rows_data], tokenized_query)
+        
     hits = []
     query_token_set = set(tokenized_query)
     

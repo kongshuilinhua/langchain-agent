@@ -11,7 +11,7 @@ from core.config import get_settings
 from core.db.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from core.integrations.llm import OpenAICompatibleProvider
 from core.integrations import vector_store as vector_store_module
-from core.services.rag import retrieve
+from core.services.rag import retrieve, _tokenize
 from core.services.uploads import DOC_TYPES, extract_document_text, sanitize_extracted_text
 
 
@@ -249,6 +249,7 @@ def index_document(
             "page": chunk_data.get("page"),
             "section": chunk_data.get("section") or "",
             "content_hash": chunk_data["content_hash"],
+            "tokens": _tokenize(chunk_text),
         }
         chunk = KnowledgeChunk(
             workspace_id=workspace_id,
@@ -433,8 +434,8 @@ def split_by_hierarchy(
             "content_hash": hashlib.sha256(intro_text.encode("utf-8")).hexdigest(),
         })
 
-    # 层级路径栈，记录当前的 [h1, h2, h3...] 标题内容
-    path_stack = []
+    # 层级路径栈，记录当前的 (level, heading_text) 元组
+    path_stack: list[tuple[int, str]] = []
 
     for i, match in enumerate(matches):
         level = len(match.group(1)) # 几层 # 号
@@ -445,12 +446,13 @@ def split_by_hierarchy(
         end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(cleaned)
         chunk_body = cleaned[start_pos:end_pos].strip()
 
-        # 动态维护层级路径面包屑
-        while len(path_stack) >= level:
+        # 动态维护层级路径面包屑：若栈顶层级比当前层级更深或相等，则持续退栈
+        while path_stack and path_stack[-1][0] >= level:
             path_stack.pop()
-        path_stack.append(f"H{level}: {heading_text}")
+            
+        path_stack.append((level, f"H{level}: {heading_text}"))
         
-        section_path = " > ".join(path_stack) if keep_hierarchy_info else ""
+        section_path = " > ".join(item[1] for item in path_stack) if keep_hierarchy_info else ""
         parent_id = f"kb{kb_id}-doc{document_id}-hnode-{level}"
 
         if chunk_body:

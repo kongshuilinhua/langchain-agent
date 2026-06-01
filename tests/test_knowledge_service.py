@@ -44,3 +44,14 @@ def test_split_by_hierarchy_no_keep_hierarchy():
     chunks = split_by_hierarchy(markdown_text, kb_id=1, document_id=1, keep_hierarchy_info=False)
     assert len(chunks) == 1
     assert chunks[0]["section"] == ""
+
+def test_split_by_hierarchy_siblings():
+    # Verify that consecutive H3 siblings correctly pop each other instead of nesting
+    markdown_text = "# H1\nText 1\n## H2\nText 2\n### H3_A\nText A\n### H3_B\nText B"
+    chunks = split_by_hierarchy(markdown_text, kb_id=1, document_id=1, max_level=3)
+    assert len(chunks) == 4  # H1, H2, H3_A, H3_B = 4
+    # H3_A path should be H1 > H2 > H3_A
+    assert chunks[2]["section"] == "H1: H1 > H2: H2 > H3: H3_A"
+    # H3_B path should be H1 > H2 > H3_B (NOT nested under H3_A)
+    assert chunks[3]["section"] == "H1: H1 > H2: H2 > H3: H3_B"
+

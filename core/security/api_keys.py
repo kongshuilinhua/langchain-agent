@@ -47,6 +47,20 @@ def decrypt_api_key(encrypted_api_key: str) -> str:
 
 def _fernet() -> Fernet:
     settings = get_settings()
-    secret = (settings.api_key_encryption_key or settings.jwt_secret or "change-me-in-production").encode("utf-8")
-    digest = hashlib.sha256(secret).digest()
+    encryption_key = settings.api_key_encryption_key
+    
+    if not encryption_key:
+        # Allow insecure dev fallback only when running mock LLM tests
+        if settings.mock_llm:
+            fallback_secret = b"dev-mode-insecure-transient-secret-key"
+        else:
+            raise ValueError(
+                "CRITICAL SECURITY ERROR: 'API_KEY_ENCRYPTION_KEY' environment variable "
+                "is not configured. Reusing JWT_SECRET for db encryption is blocked "
+                "to prevent credentials compromise."
+            )
+    else:
+        fallback_secret = encryption_key.encode("utf-8")
+        
+    digest = hashlib.sha256(fallback_secret).digest()
     return Fernet(base64.urlsafe_b64encode(digest))

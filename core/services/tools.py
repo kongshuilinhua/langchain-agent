@@ -33,6 +33,39 @@ HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 AUTH_TYPES = {"none", "bearer", "header", "query"}
 CLOUD_METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 
+import threading
+from contextlib import contextmanager
+
+# Thread-local storage to hold host-to-IP mappings during requests
+_local_dns_pinning = threading.local()
+
+@contextmanager
+def dns_pinned(host: str, ip: str):
+    """Context manager to pin DNS lookups for a specific host to a specific IP."""
+    if not hasattr(_local_dns_pinning, "pins"):
+        _local_dns_pinning.pins = {}
+    _local_dns_pinning.pins[host.lower()] = ip
+    
+    original_getaddrinfo = socket.getaddrinfo
+    
+    def pinned_getaddrinfo(h, port, family=0, type=0, proto=0, flags=0):
+        h_lower = str(h or "").lower()
+        if hasattr(_local_dns_pinning, "pins") and h_lower in _local_dns_pinning.pins:
+            pinned_ip = _local_dns_pinning.pins[h_lower]
+            is_ipv6 = ":" in pinned_ip
+            fam = socket.AF_INET6 if is_ipv6 else socket.AF_INET
+            return [(fam, socket.SOCK_STREAM, 6, "", (pinned_ip, port))]
+        return original_getaddrinfo(h, port, family, type, proto, flags)
+        
+    socket.getaddrinfo = pinned_getaddrinfo
+    try:
+        yield
+    finally:
+        if hasattr(_local_dns_pinning, "pins"):
+            _local_dns_pinning.pins.pop(host.lower(), None)
+        socket.getaddrinfo = original_getaddrinfo
+
+
 # ── Built-in tool implementations ───────────────────────────────────
 
 _BUILTIN_OPS = {
@@ -559,6 +592,12 @@ class SafeEvalVisitor(ast.NodeVisitor):
         op_type = type(node.op)
         if op_type not in self.allowed_ops:
             raise ValueError(f"Operator {op_type.__name__} is not allowed")
+        # Guard against exponent bombs (e.g. 10**10**10)
+        if op_type == ast.Pow:
+            if isinstance(right, (int, float)) and abs(right) > 1000:
+                raise ValueError("Exponent too large (max 1000)")
+            if isinstance(left, (int, float)) and abs(left) > 1e15:
+                raise ValueError("Base too large for power operation")
         return self.allowed_ops[op_type](left, right)
 
     def visit_UnaryOp(self, node):
@@ -646,9 +685,29 @@ def _exec_web_reader(args: dict) -> dict:
     url = str(args.get("url") or "").strip()
     if not url:
         return {"content": json.dumps({"error": "URL cannot be empty"}), "result_preview": "Error: Empty URL"}
+    # SSRF protection: block internal/private URLs
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return {"content": json.dumps({"error": "Invalid URL scheme (http/https required)"}), "result_preview": "Error: Invalid URL"}
+        host = parsed.hostname.strip().lower()
+        if host in {"localhost", "metadata", "metadata.google.internal"} or host.endswith(".localhost"):
+            return {"content": json.dumps({"error": "Blocked internal URL"}), "result_preview": "Error: Blocked URL"}
+        try:
+            ip = ipaddress.ip_address(host)
+            _reject_ip(ip)
+            validated_ip = str(ip)
+        except ValueError:
+            addr_info = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+            validated_ip = addr_info[0][4][0]
+            for info in addr_info:
+                _reject_ip(ipaddress.ip_address(info[4][0]))
+    except ValueError:
+        return {"content": json.dumps({"error": "Blocked: URL resolves to internal address"}), "result_preview": "Error: Blocked URL"}
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        resp = requests.get(url, headers=headers, timeout=8)
+        with dns_pinned(host, validated_ip):
+            resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code != 200:
             return {"content": json.dumps({"error": f"Failed to fetch page. HTTP status: {resp.status_code}"}), "result_preview": f"HTTP Error: {resp.status_code}"}
         
@@ -890,7 +949,9 @@ def _exec_password_generator(args: dict) -> dict:
     elif length > 128:
         length = 128
     chars = string.ascii_letters + string.digits + "!@#$%^&*"
-    pwd = "".join(random.choice(chars) for _ in range(length))
+    # Use cryptographically secure randomness for password generation
+    import secrets as _secrets
+    pwd = "".join(_secrets.choice(chars) for _ in range(length))
     return {"content": json.dumps({"password": pwd}), "result_preview": pwd}
 
 
@@ -923,7 +984,8 @@ def _exec_character_counter(args: dict) -> dict:
 
 
 def _execute_http_tool(tool: Tool, context: dict) -> dict:
-    _validate_safe_https_url(tool.url)
+    validated_ip = _validate_safe_https_url(tool.url)
+    parsed_host = urllib.parse.urlparse(tool.url).hostname
     input_data = _dict_value(context.get("input"))
     body = context.get("body")
     query = _query_params(tool.query_schema or {}, input_data)
@@ -939,23 +1001,24 @@ def _execute_http_tool(tool: Tool, context: dict) -> dict:
     request = urllib.request.Request(url, data=data, headers=headers, method=tool.method)
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=tool.timeout_seconds) as response:
-            content_type = response.headers.get("Content-Type", "")
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise ValueError("Tool response is too large")
-            text = raw.decode("utf-8", errors="replace")
-            result_json = _safe_json(text)
-            return {
-                "tool": tool.name,
-                "tool_type": tool.type,
-                "status_code": response.status,
-                "content_type": content_type,
-                "latency_ms": int((time.monotonic() - started) * 1000),
-                "content": _preview(text, 4000),
-                "result_preview": _preview(text),
-                "result_json": result_json,
-            }
+        with dns_pinned(parsed_host, validated_ip):
+            with urllib.request.urlopen(request, timeout=tool.timeout_seconds) as response:
+                content_type = response.headers.get("Content-Type", "")
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Tool response is too large")
+                text = raw.decode("utf-8", errors="replace")
+                result_json = _safe_json(text)
+                return {
+                    "tool": tool.name,
+                    "tool_type": tool.type,
+                    "status_code": response.status,
+                    "content_type": content_type,
+                    "latency_ms": int((time.monotonic() - started) * 1000),
+                    "content": _preview(text, 4000),
+                    "result_preview": _preview(text),
+                    "result_json": result_json,
+                }
     except urllib.error.HTTPError as exc:
         detail = exc.read(512).decode("utf-8", errors="replace")
         raise ValueError(f"HTTP tool request failed with status {exc.code}: {_preview(detail, 200)}") from exc
@@ -963,7 +1026,7 @@ def _execute_http_tool(tool: Tool, context: dict) -> dict:
         raise ValueError("HTTP tool request failed") from exc
 
 
-def _validate_safe_https_url(url: str) -> None:
+def _validate_safe_https_url(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("HTTP tools require an HTTPS URL")
@@ -973,11 +1036,13 @@ def _validate_safe_https_url(url: str) -> None:
     try:
         ip = ipaddress.ip_address(host)
         _reject_ip(ip)
-        return
+        return str(ip)
     except ValueError:
         pass
-    for info in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM):
+    addr_info = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+    for info in addr_info:
         _reject_ip(ipaddress.ip_address(info[4][0]))
+    return str(addr_info[0][4][0])
 
 
 def _reject_ip(ip: ipaddress._BaseAddress) -> None:
