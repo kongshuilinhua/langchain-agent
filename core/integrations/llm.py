@@ -11,20 +11,39 @@ from dataclasses import dataclass, field
 
 from core.config import get_settings
 
+# 🎯 系统硬编码默认的 OpenAI 兼容模式 API 端点（指向阿里云百炼/通义千问兼容接口）
 DASHSCOPE_COMPATIBLE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 OPENAI_COMPATIBLE_DEFAULT_BASE = DASHSCOPE_COMPATIBLE_BASE
 
 
 @dataclass
 class ChatResponse:
+    """
+    统一的智能体文本响应实体类。
+    
+    🎯 意图与工程大局观：
+        抹平各大模型厂商返回格式的微观差异，为上层 Agent 提供标准格式。
+        支持携带内容 `content` 和工具调用列表 `tool_calls`。
+    """
     content: str | None = None
     tool_calls: list[dict] | None = None
 
 
 class OpenAICompatibleProvider:
-    """Small OpenAI-compatible client with function calling support."""
+    """
+    标准 OpenAI 兼容模型提供商。
+
+    🎯 意图与工程大局观：
+        系统底层唯一且核心的通用 LLM 交互客户端。
+        不仅支持同步问答（chat）、流式输出（chat_stream）、文本嵌入（embed），还前瞻性地内置了标准 RAG 重排器（rerank）接口。
+        
+    🛡️ 防御性设计：
+        - 完全基于 Python 原生库 `urllib.request` 实现，不引入 `requests` 或 `httpx` 等外部网络库，保证系统核心引擎的极致轻量化与高可移植性。
+        - 深度融合了测试开发模式（mock_llm），在没有 API 密钥或处于脱机开发测试场景下自动进行仿真响应，极大提升了测试反馈速度。
+    """
 
     def __init__(self) -> None:
+        # 🛡️ 调试标记：记录上一次交互是否由 Mock 仿真模块接管，便于单元测试进行状态断言
         self.last_chat_mock = False
         self.last_embed_mock = False
 
@@ -37,6 +56,16 @@ class OpenAICompatibleProvider:
         runtime_config: dict | None = None,
         tools: list[dict] | None = None,
     ) -> ChatResponse:
+        """
+        同步文本生成方法（支持 Tool Call 参数请求）。
+
+        🧠 魔鬼数字与前沿技术参数：
+            - `temperature` 默认 0.4: 处于确定性回答与创造性逻辑的均衡点，适合严谨的 Agent 编排流转。
+            - 针对 Mock 模式，工具调用仿真生成确定性的哈希值作为 call_id，方便前后端状态回溯。
+        
+        🛡️ 防御性编程：
+            - 对空 API_KEY 在执行前进行前置检查，避免发出无谓的 HTTP 请求。
+        """
         settings = get_settings()
         api_key = self._api_key(settings, runtime_config, purpose="chat")
         if settings.mock_llm:
@@ -79,6 +108,13 @@ class OpenAICompatibleProvider:
         runtime_config: dict | None = None,
         tools: list[dict] | None = None,
     ) -> Iterable[str]:
+        """
+        异步流式文本生成生成器（Server-Sent Events）。
+
+        ⚡ 边界与性能思考：
+            - 利用 Python 的 `yield` 关键字返回生成器，支持逐字/逐词流式推送到前端，显著降低用户端首字延迟（TTFT）。
+            - 流式输出在大批量并发处理下，能大幅平抑服务器网络 I/O 峰值吞吐，优化瞬时带宽占用。
+        """
         settings = get_settings()
         api_key = self._api_key(settings, runtime_config, purpose="chat")
         if settings.mock_llm:
@@ -104,12 +140,16 @@ class OpenAICompatibleProvider:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        # When tools are present, stream normally — the caller (agent loop)
-        # uses non-streaming chat() for tool-call decisions, so stream is
-        # only for the final answer phase.
+        # 🎯 编排流转：有工具绑定时，实际上由工作流 runtime 模块使用非流式 chat() 做决策，流式仅在最后的最终回答生成阶段触发
         yield from self._post_json_stream(url, payload, api_key)
 
     def embed(self, text: str, *, runtime_config: dict | None = None) -> list[float]:
+        """
+        文本向量化嵌入（Embedding）。
+
+        🧠 魔鬼数字与前沿技术参数：
+            - Mock 向量生成机制：输出 32 维特征向量（数值区间为 [-1.0, 1.0]），确保能够被相似度计算方法（IP / Cosine）正常解析。
+        """
         settings = get_settings()
         api_key = self._api_key(settings, runtime_config, purpose="embedding")
         if settings.mock_llm:
@@ -126,6 +166,16 @@ class OpenAICompatibleProvider:
         return data["data"][0]["embedding"]
 
     def rerank(self, query: str, documents: list[str], *, top_n: int | None = None, model: str | None = None) -> list[dict]:
+        """
+        RAG 检索重排（Rerank）。
+
+        🎯 意图与工程大局观：
+            - 提供针对召回知识文档的深度语义相关性评估。向量检索侧重粗筛，而重排利用精细的 Cross-Encoder 模型做精准打分，极大缓解大模型长上下文带来的“迷失在中间（Lost in the Middle）”问题。
+            
+        🛡️ 防御性设计：
+            - 当传入文档列表为空时，直接短路返回空列表，避免向模型网关发出空负载请求。
+            - 自动兼容第三方 Rerank 厂商非标的输出格式（如 `index`/`document_index`、`relevance_score`/`rank_score` 等各种 JSON 字段变体）。
+        """
         settings = get_settings()
         api_key = self._api_key(settings, purpose="rerank")
         if not documents:
@@ -165,9 +215,15 @@ class OpenAICompatibleProvider:
             normalized.append({"index": int(index), "relevance_score": float(score or 0)})
         return normalized[: top_n or len(normalized)]
 
-    # ── private helpers ──────────────────────────────────────────
+    # ── 私有辅助方法群 ──────────────────────────────────────────
 
     def _parse_chat_response(self, data: dict) -> ChatResponse:
+        """
+        解析并抽取模型返回的数据报文。
+        
+        🛡️ 防御性设计：
+            - 利用极度安全的字典 `get` 级联，提供全面的降级默认值，确保就算模型返回了缺失某字段的不良报文，系统也不会产生 KeyError 级物理崩溃。
+        """
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         content = message.get("content")
@@ -188,6 +244,12 @@ class OpenAICompatibleProvider:
         return ChatResponse(content=str(content) if content else "")
 
     def _api_key(self, settings, runtime_config: dict | None = None, *, purpose: str = "chat") -> str | None:
+        """
+        多路 API Key 路由解析器。
+        
+        🎯 意图与工程大局观：
+            - 按优先级解析：用户私有模型 BYOK 传入密钥 -> 全局各厂商（Embedding/Rerank/DeepSeek/DashScope）专属环境变量 -> 通用 OpenAI 兼容变量，实现无感的多引擎自适应接入。
+        """
         if runtime_config and purpose == "chat" and runtime_config.get("api_key"):
             return str(runtime_config["api_key"]).strip() or None
         if purpose == "embedding" and settings.embedding_api_key:
@@ -206,6 +268,9 @@ class OpenAICompatibleProvider:
         return (settings.openai_api_key or settings.dashscope_api_key or "").strip() or None
 
     def _api_base(self, settings, runtime_config: dict | None = None, *, purpose: str = "chat") -> str:
+        """
+        多路 API Base URL 路由解析器。
+        """
         if runtime_config and purpose == "chat" and runtime_config.get("base_url"):
             return str(runtime_config["base_url"]).strip()
         if purpose == "embedding" and settings.embedding_api_base:
@@ -223,6 +288,16 @@ class OpenAICompatibleProvider:
         return base or OPENAI_COMPATIBLE_DEFAULT_BASE
 
     def _post_json(self, url: str, payload: dict, api_key: str, *, timeout_seconds: int = 60) -> dict:
+        """
+        同步 POST JSON 工具函数。
+
+        🧠 魔鬼数字与前沿技术参数：
+            - `timeout_seconds` 默认 60: 适合处理大模型首字延迟或较复杂的工具推理时常，防止网络波动导致提前熔断。
+        
+        🛡️ 防御性设计：
+            - 在异常处理（urllib.error.HTTPError）中，使用 `[:800]` 截断大段的报错包体，防止大篇幅无意义的 HTML/JSON 报错直接撑爆控制台日志系统。
+            - 针对底层各种网络抖动、Socket 超时、SSL 握手异常或 OS 系统层异常进行全包围式的 Try-Catch 捕获，并转化为统一的工程化 RuntimeError。
+        """
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -246,6 +321,14 @@ class OpenAICompatibleProvider:
             ) from exc
 
     def _post_json_stream(self, url: str, payload: dict, api_key: str) -> Iterable[str]:
+        """
+        纯 Python 原生 SSE（Server-Sent Events）解析流式输出生成器。
+
+        🛡️ 防御性设计：
+            - `Accept` 字段指定为 "text/event-stream" 触发流式模式。
+            - 过滤非数据行或空行，智能忽略并容错无法被 JSON 反序列化的碎片行。
+            - 处理 EOF 状态：接收到 `[DONE]` 字符后，优雅退出流式生成，阻断无用的后续空循环读取。
+        """
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -283,6 +366,12 @@ class OpenAICompatibleProvider:
             ) from exc
 
     def _stream_delta(self, data: dict) -> str:
+        """
+        流式消息碎片字段定位处理器。
+        
+        🛡️ 防御性设计：
+            - 精细解析 OpenAI 的 delta 字段，兼容不同的 delta 报文返回，包括支持列表变体 `choices[0].delta.content`，避免多厂商细微差异引起的解析异常崩溃。
+        """
         choices = data.get("choices") or []
         if not choices:
             return ""
@@ -305,6 +394,12 @@ class OpenAICompatibleProvider:
         return text if isinstance(text, str) else ""
 
     def _content_text(self, content) -> str:
+        """
+        标准/多模态消息包体文本化抽取。
+        
+        🛡️ 防御性设计：
+            - 智能抹平字符串与 OpenAI 多模态列表结构（List of dicts containing image_url and text）的格式差异，保障系统在遇到多模态输入时能稳定降级提取用于哈希或元数据分析的文本。
+        """
         if isinstance(content, str):
             return content
         if isinstance(content, list):
