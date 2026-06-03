@@ -54,6 +54,453 @@ import { fetchKnowledgeBases, fetchTools, fetchModels, fetchUserModels, fetchPro
 import { useAuthStore } from './store/useAuthStore.js';
 import { useAgentStore } from './store/useAgentStore.js';
 import { useChatStore } from './store/useChatStore.js';
+// Phase 4: extracted page components
+import { AgentsHome } from './pages/AgentsHome.jsx';
+import { MarketHome } from './pages/MarketHome.jsx';
+import { ReviewHome } from './pages/ReviewHome.jsx';
+import { MembersHome } from './pages/MembersHome.jsx';
+
+
+function KnowledgeHome({
+  canManage,
+  createKnowledgeBase,
+  updateKnowledgeBase,
+  deleteDocument,
+  deleteKnowledgeBase,
+  docForm,
+  documents,
+  knowledgeBases,
+  setDocForm,
+  setProfileError,
+  uploadingKnowledgeFile,
+  uploadingFileName,
+  uploadDocument,
+  uploadKnowledgeFile,
+  token,
+  loadDocuments,
+  notify,
+}) {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [form, setForm] = useState(() => defaultKnowledgeBaseForm());
+  const [saving, setSaving] = useState(false);
+
+  // Task 4 States
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'detail'
+  const [activeKbId, setActiveKbId] = useState(null); // number
+  const [activeDoc, setActiveDoc] = useState(null); // object
+  const [resegmentOpen, setResegmentOpen] = useState(false); // boolean
+
+  // Synchronize state when entering detail view
+  function handleSelectKb(kbId) {
+    setActiveKbId(kbId);
+    setDocForm((current) => ({ ...current, kb_id: String(kbId) }));
+    setViewMode('detail');
+  }
+
+  function handleBack() {
+    setViewMode('list');
+    setActiveDoc(null);
+  }
+
+  function openCreate() {
+    setForm(defaultKnowledgeBaseForm());
+    setCreateOpen(true);
+  }
+
+  function closeCreate() {
+    if (saving) return;
+    setCreateOpen(false);
+  }
+
+  async function submitKnowledgeBase(event) {
+    event.preventDefault();
+    setSaving(true);
+    setProfileError('');
+    try {
+      const saved = await createKnowledgeBase(form);
+      if (saved?.id) {
+        setDocForm((current) => ({ ...current, kb_id: String(saved.id) }));
+      }
+      setForm(defaultKnowledgeBaseForm());
+      setCreateOpen(false);
+    } catch (err) {
+      setProfileError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const selectedKb = useMemo(() => {
+    return knowledgeBases.find((kb) => kb.id === activeKbId) || null;
+  }, [knowledgeBases, activeKbId]);
+
+  return (
+    <div className="content-page knowledge-home-page">
+      {viewMode === 'list' ? (
+        <KnowledgeDashboard
+          knowledgeBases={knowledgeBases}
+          deleteKnowledgeBase={deleteKnowledgeBase}
+          openCreate={openCreate}
+          onSelectKb={handleSelectKb}
+          notify={notify}
+        />
+      ) : (
+        <KnowledgeWorkspace
+          kb={selectedKb}
+          documents={documents}
+          deleteDocument={deleteDocument}
+          updateKnowledgeBase={updateKnowledgeBase}
+          uploadDocument={uploadDocument}
+          uploadKnowledgeFile={uploadKnowledgeFile}
+          uploadingKnowledgeFile={uploadingKnowledgeFile}
+          uploadingFileName={uploadingFileName}
+          docForm={docForm}
+          setDocForm={setDocForm}
+          handleBack={handleBack}
+          activeDoc={activeDoc}
+          setActiveDoc={setActiveDoc}
+          setResegmentOpen={setResegmentOpen}
+          token={token}
+        />
+      )}
+
+      {createOpen && (
+        <KnowledgeBaseDialog
+          form={form}
+          onCancel={closeCreate}
+          onChange={setForm}
+          onSubmit={submitKnowledgeBase}
+          saving={saving}
+        />
+      )}
+
+      {resegmentOpen && activeDoc && (
+        <ResegmentModal
+          isOpen={resegmentOpen}
+          onClose={() => setResegmentOpen(false)}
+          kbId={activeKbId}
+          doc={activeDoc}
+          token={token}
+          onResegmentSuccess={async () => {
+            setResegmentOpen(false);
+            if (activeKbId && loadDocuments) {
+              await loadDocuments(activeKbId);
+            }
+          }}
+          notify={notify}
+        />
+      )}
+    </div>
+  );
+}
+
+
+function UserModelsHome({ adminModels, canManage, createModelConfig, deleteModelConfig, requestDeleteConfirm, setProfileError, updateModelConfig, ...userModelProps }) {
+  return (
+    <div className="content-page">
+      <header className="page-heading">
+        <div>
+          <h1>我的模型</h1>
+          <p>维护你自己的 OpenAI-compatible 模型连接，保存后可在智能体配置里选择。</p>
+        </div>
+      </header>
+      <UserModelsPanel requestDeleteConfirm={requestDeleteConfirm} setProfileError={setProfileError} {...userModelProps} />
+      {canManage && (
+        <ModelAdminPanel
+          createModelConfig={createModelConfig}
+          deleteModelConfig={deleteModelConfig}
+          models={adminModels}
+          requestDeleteConfirm={requestDeleteConfirm}
+          setProfileError={setProfileError}
+          updateModelConfig={updateModelConfig}
+        />
+      )}
+    </div>
+  );
+}
+
+
+function ToolsHome({ createToolConfig, deleteToolConfig, openBuilder, requestDeleteConfirm, setProfileError, testToolConfig, tools, updateToolConfig }) {
+  return (
+    <div className="content-page">
+      <header className="page-heading">
+        <div>
+          <h1>工具</h1>
+          <p>管理可绑定到智能体的内置搜索和 HTTP 工具。密钥只在保存时提交，保存后仅显示 has_secret 状态。</p>
+        </div>
+        <button className="primary" type="button" onClick={openBuilder}><Bot size={16} />打开 Builder</button>
+      </header>
+      <ToolsPanel
+        createToolConfig={createToolConfig}
+        deleteToolConfig={deleteToolConfig}
+        requestDeleteConfirm={requestDeleteConfirm}
+        setProfileError={setProfileError}
+        testToolConfig={testToolConfig}
+        tools={tools}
+        updateToolConfig={updateToolConfig}
+      />
+    </div>
+  );
+}
+
+
+function ResourceLibraryHome({
+  activeAgentId,
+  agentForm,
+  copyBuiltinPromptTemplate,
+  createPromptTemplate,
+  deletePromptTemplate,
+  knowledgeBases,
+  openBuilder,
+  promptTemplates,
+  requestDeleteConfirm,
+  setActiveNav,
+  setAgentForm,
+  setProfileError,
+  setView,
+  tools,
+  updatePromptTemplate,
+}) {
+  const [tab, setTab] = useState('all');
+  const [query, setQuery] = useState('');
+  const [selectedTemplate, setSelectedTemplate] = useState(promptTemplates[0] || null);
+  const [editingTemplate, setEditingTemplate] = useState(null);
+  const [form, setForm] = useState(() => defaultPromptTemplateForm());
+  const [formOpen, setFormOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    if (!selectedTemplate && promptTemplates.length) {
+      setSelectedTemplate(promptTemplates[0]);
+    } else if (selectedTemplate && !promptTemplates.some((item) => item.id === selectedTemplate.id)) {
+      setSelectedTemplate(promptTemplates[0] || null);
+    }
+  }, [promptTemplates, selectedTemplate?.id]);
+
+  const filteredTemplates = filterPromptTemplates(promptTemplates, query);
+  const filteredTools = filterResourceItems(tools, query, (tool) => `${tool.label || ''} ${tool.name || ''} ${tool.description || ''}`);
+  const filteredKnowledge = filterResourceItems(knowledgeBases, query, (kb) => `${kb.name || ''} ${kb.description || ''}`);
+  const showPrompts = tab === 'all' || tab === 'prompts';
+  const showTools = tab === 'all' || tab === 'tools';
+  const showKnowledge = tab === 'all' || tab === 'knowledge';
+
+  function insertTemplate(template) {
+    if (!template?.content) return;
+    insertPromptIntoAgent(setAgentForm, template.content);
+    setSelectedTemplate(template);
+    setNotice('模板已插入当前智能体 Prompt。');
+  }
+
+  function openCreate(template = null) {
+    setEditingTemplate(null);
+    setForm(template ? formFromPromptTemplate(template, { title: `${template.title} 副本` }) : defaultPromptTemplateForm());
+    setNotice('');
+    setFormOpen(true);
+  }
+
+  function openEdit(template) {
+    setEditingTemplate(template);
+    setForm(formFromPromptTemplate(template));
+    setSelectedTemplate(template);
+    setNotice('');
+    setFormOpen(true);
+  }
+
+  function closeTemplateForm() {
+    if (saving) return;
+    setFormOpen(false);
+    setEditingTemplate(null);
+    setForm(defaultPromptTemplateForm());
+  }
+
+  async function saveTemplate(event) {
+    event.preventDefault();
+    setSaving(true);
+    setNotice('');
+    setProfileError('');
+    try {
+      const payload = promptTemplateFormPayload(form);
+      const saved = editingTemplate?.db_id
+        ? await updatePromptTemplate(editingTemplate.db_id, payload)
+        : await createPromptTemplate(payload);
+      setEditingTemplate(null);
+      setForm(defaultPromptTemplateForm());
+      setFormOpen(false);
+      setSelectedTemplate(saved);
+      setNotice('提示词模板已保存。');
+    } catch (err) {
+      setProfileError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function copyBuiltin(template) {
+    if (!template?.id) return;
+    setSaving(true);
+    setNotice('');
+    setProfileError('');
+    try {
+      const copied = await copyBuiltinPromptTemplate({
+        builtin_id: template.id.replace('builtin:', ''),
+        title: `${template.title} 副本`,
+      });
+      setSelectedTemplate(copied);
+      setNotice('已复制为我的模板。');
+    } catch (err) {
+      setProfileError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeTemplate(template) {
+    if (!template?.db_id) return;
+    const confirmed = await requestDeleteConfirm({
+      title: '删除提示词模板',
+      message: `删除「${template.title}」？`,
+      detail: '删除后，资源库和 Builder 模板区都不再显示该模板。',
+      confirmLabel: '删除模板',
+    });
+    if (!confirmed) return;
+    setSaving(true);
+    setNotice('');
+    setProfileError('');
+    try {
+      await deletePromptTemplate(template.db_id);
+      setSelectedTemplate(null);
+      setNotice('模板已删除。');
+    } catch (err) {
+      setProfileError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="content-page resource-page">
+      <header className="page-heading resource-heading">
+        <div>
+          <h1>资源库</h1>
+          <p>管理当前可用资源。这里暂只展示已实现的插件、知识库和提示词。</p>
+        </div>
+        <div className="resource-actions">
+          <label className="resource-search">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索资源" />
+          </label>
+          <button className="primary" type="button" onClick={() => openCreate()}><Plus size={15} />新建提示词</button>
+        </div>
+      </header>
+
+      <div className="resource-tabs">
+        {[
+          ['all', '全部'],
+          ['tools', '插件'],
+          ['knowledge', '知识库'],
+          ['prompts', '提示词'],
+        ].map(([key, label]) => (
+          <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>
+        ))}
+      </div>
+
+      <div className="resource-layout">
+        <section className="resource-list-panel">
+          {showPrompts && (
+            <ResourceSection
+              title="提示词"
+              count={filteredTemplates.length}
+              emptyText="暂无提示词模板"
+            >
+              {filteredTemplates.map((template) => (
+                <ResourceRow
+                  key={template.id}
+                  icon={<FileText size={17} />}
+                  title={template.title}
+                  desc={template.description || template.content}
+                  type={template.source === 'builtin' ? '预置提示词' : '我的提示词'}
+                  meta={template.category || 'general'}
+                  active={selectedTemplate?.id === template.id}
+                  onClick={() => setSelectedTemplate(template)}
+                  actions={
+                    <>
+                      <button type="button" onClick={(event) => { event.stopPropagation(); setSelectedTemplate(template); }}>预览</button>
+                      <button type="button" onClick={(event) => { event.stopPropagation(); insertTemplate(template); }}>插入</button>
+                      {template.source === 'builtin' && <button type="button" disabled={saving} onClick={(event) => { event.stopPropagation(); copyBuiltin(template); }}>复制</button>}
+                      {template.editable && <button type="button" disabled={saving} onClick={(event) => { event.stopPropagation(); openEdit(template); }}>编辑</button>}
+                      {template.editable && <button type="button" disabled={saving} onClick={(event) => { event.stopPropagation(); removeTemplate(template); }}>删除</button>}
+                    </>
+                  }
+                />
+              ))}
+            </ResourceSection>
+          )}
+
+          {showTools && (
+            <ResourceSection title="插件" count={filteredTools.length} emptyText="暂无插件">
+              {filteredTools.map((tool) => (
+                <ResourceRow
+                  key={`tool-${tool.id}`}
+                  icon={<Wand2 size={17} />}
+                  title={tool.label || tool.name}
+                  desc={tool.description || tool.name}
+                  type="插件"
+                  meta={`${toolType(tool)} · ${tool.enabled === false ? '停用' : '启用'}`}
+                  actions={<button type="button" onClick={() => setActiveNav('tools')}>管理</button>}
+                />
+              ))}
+            </ResourceSection>
+          )}
+
+          {showKnowledge && (
+            <ResourceSection title="知识库" count={filteredKnowledge.length} emptyText="暂无知识库">
+              {filteredKnowledge.map((kb) => (
+                <ResourceRow
+                  key={`kb-${kb.id}`}
+                  icon={<Database size={17} />}
+                  title={kb.name}
+                  desc={kb.description || `${kb.document_count || 0} 个文档`}
+                  type="知识库"
+                  meta={`${kb.document_count || 0} 文档`}
+                  actions={<button type="button" onClick={() => setActiveNav('knowledge')}>管理</button>}
+                />
+              ))}
+            </ResourceSection>
+          )}
+        </section>
+
+        <aside className="resource-detail-panel">
+          <PromptTemplatePreview
+            activeAgentId={activeAgentId}
+            template={selectedTemplate}
+            onInsert={insertTemplate}
+            onCopy={copyBuiltin}
+            onEdit={openEdit}
+            onDelete={removeTemplate}
+            saving={saving}
+          />
+          <section className="resource-side-actions">
+            <button type="button" onClick={() => { setView('builder'); openBuilder(); }}>打开 Builder</button>
+            <button className="primary-model-action" type="button" onClick={() => openCreate()}><Plus size={15} />新建模板</button>
+          </section>
+        </aside>
+      </div>
+      {notice && <p className="model-row-warning floating-notice">{notice}</p>}
+      {formOpen && (
+        <PromptTemplateDialog
+          editingTemplate={editingTemplate}
+          form={form}
+          onCancel={closeTemplateForm}
+          onChange={setForm}
+          onSubmit={saveTemplate}
+          saving={saving}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── 原有 utils.js 导入（逐步迁移到 lib/ 后删除）──
 import {
   API_BASE,
@@ -1928,127 +2375,6 @@ const CHAT_COPY = {
 
 
 
-function AgentsHome({ agents, activeAgentId, canManage, createAgent, deleteAgent, me, openBuilder, setActiveAgentId }) {
-  return (
-    <div className="content-page">
-      <header className="page-heading">
-        <div>
-          <h1>智能体</h1>
-          <p>创建、选择和编辑你的智能体。普通用户提交发布后需要管理员审核。</p>
-        </div>
-        <button className="primary" type="button" onClick={() => createAgent(true)}><Plus size={16} />创建智能体</button>
-      </header>
-      <div className="agent-grid">
-        {agents.map((agent) => (
-          <article className={`agent-card ${agent.id === activeAgentId ? 'active' : ''}`} key={agent.id}>
-            <AgentAvatar value={agent.avatar} />
-            <h3>{agent.name}</h3>
-            <p>{agent.description || '暂无简介'}</p>
-            <small className={`status-pill ${agent.status}`}>{statusLabel(agent.status)}</small>
-            <div>
-              <button type="button" onClick={() => setActiveAgentId(agent.id)}>设为当前</button>
-              <button type="button" disabled={!canManage && agent.created_by !== me?.id} onClick={() => openBuilder(agent.id)}>编辑</button>
-              {!agent.is_template && (
-                <button
-                  className="danger-light"
-                  type="button"
-                  disabled={!canManage && agent.created_by !== me?.id}
-                  onClick={() => deleteAgent(agent).catch((err) => console.error(err))}
-                >
-                  删除
-                </button>
-              )}
-            </div>
-          </article>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MarketHome({ agents, copyMarketAgent }) {
-  return (
-    <div className="content-page">
-      <header className="page-heading">
-        <div>
-          <h1>智能体市场</h1>
-          <p>审核通过的智能体会显示在这里，其他用户可以复制成自己的草稿后继续配置。</p>
-        </div>
-      </header>
-      <div className="agent-grid">
-        {agents.map((agent) => (
-          <article className="agent-card" key={agent.id}>
-            <AgentAvatar value={agent.avatar} />
-            <h3>{agent.name}</h3>
-            <p>{agent.description || '暂无简介'}</p>
-            <small className="status-pill published">版本 {agent.version || '-'}</small>
-            <div>
-              <button type="button" onClick={() => copyMarketAgent(agent.id).catch((err) => console.error(err))}>复制使用</button>
-            </div>
-          </article>
-        ))}
-        {agents.length === 0 && <p className="empty-state">市场里还没有审核通过的智能体。</p>}
-      </div>
-    </div>
-  );
-}
-
-function ReviewHome({ approveReview, items, rejectReview }) {
-  return (
-    <div className="content-page">
-      <header className="page-heading">
-        <div>
-          <h1>发布审核</h1>
-          <p>普通用户提交发布后，管理员在这里审核；通过后会进入市场。</p>
-        </div>
-      </header>
-      <div className="review-list">
-        {items.map((agent) => (
-          <article className="review-card" key={agent.id}>
-            <AgentAvatar value={agent.avatar} className="agent-avatar" />
-            <div>
-              <h3>{agent.name}</h3>
-              <p>{agent.description || '暂无简介'}</p>
-              <small>提交版本 {agent.submitted_version || '-'} · {agent.submitted_at || '刚刚'}</small>
-            </div>
-            <div className="review-actions">
-              <button type="button" onClick={() => rejectReview(agent.id).catch((err) => console.error(err))}>驳回</button>
-              <button className="primary" type="button" onClick={() => approveReview(agent.id).catch((err) => console.error(err))}>通过</button>
-            </div>
-          </article>
-        ))}
-        {items.length === 0 && <p className="empty-state">暂无待审核智能体。</p>}
-      </div>
-    </div>
-  );
-}
-
-function MembersHome({ members }) {
-  return (
-    <div className="content-page">
-      <header className="page-heading">
-        <div>
-          <h1>成员</h1>
-          <p>管理员只查看成员列表。最终版不提供邀请用户和邀请列表页面。</p>
-        </div>
-      </header>
-      <div className="member-list">
-        {members.map((member) => (
-          <article className="member-card" key={member.id}>
-            <UserAvatar user={member.user} className="account-avatar" />
-            <div>
-              <h3>{member.user?.name || member.user?.email}</h3>
-              <p>{member.user?.email}</p>
-            </div>
-            <span className="status-pill">{roleLabel(member.role)}</span>
-          </article>
-        ))}
-        {members.length === 0 && <p className="empty-state">暂无成员。</p>}
-      </div>
-    </div>
-  );
-}
-
 function AgentIdentityDialog({ error, initialForm, mode, onCancel, onSubmit, saving }) {
   const [form, setForm] = useState(() => normalizeAgentIdentity(initialForm));
   const title = mode === 'create' ? '创建智能体' : '编辑智能体';
@@ -2158,139 +2484,6 @@ function SecretInputDialog({ label = '密钥', message, onCancel, onSubmit, plac
           </footer>
         </form>
       </section>
-    </div>
-  );
-}
-
-function KnowledgeHome({
-  canManage,
-  createKnowledgeBase,
-  updateKnowledgeBase,
-  deleteDocument,
-  deleteKnowledgeBase,
-  docForm,
-  documents,
-  knowledgeBases,
-  setDocForm,
-  setProfileError,
-  uploadingKnowledgeFile,
-  uploadingFileName,
-  uploadDocument,
-  uploadKnowledgeFile,
-  token,
-  loadDocuments,
-  notify,
-}) {
-  const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState(() => defaultKnowledgeBaseForm());
-  const [saving, setSaving] = useState(false);
-
-  // Task 4 States
-  const [viewMode, setViewMode] = useState('list'); // 'list' | 'detail'
-  const [activeKbId, setActiveKbId] = useState(null); // number
-  const [activeDoc, setActiveDoc] = useState(null); // object
-  const [resegmentOpen, setResegmentOpen] = useState(false); // boolean
-
-  // Synchronize state when entering detail view
-  function handleSelectKb(kbId) {
-    setActiveKbId(kbId);
-    setDocForm((current) => ({ ...current, kb_id: String(kbId) }));
-    setViewMode('detail');
-  }
-
-  function handleBack() {
-    setViewMode('list');
-    setActiveDoc(null);
-  }
-
-  function openCreate() {
-    setForm(defaultKnowledgeBaseForm());
-    setCreateOpen(true);
-  }
-
-  function closeCreate() {
-    if (saving) return;
-    setCreateOpen(false);
-  }
-
-  async function submitKnowledgeBase(event) {
-    event.preventDefault();
-    setSaving(true);
-    setProfileError('');
-    try {
-      const saved = await createKnowledgeBase(form);
-      if (saved?.id) {
-        setDocForm((current) => ({ ...current, kb_id: String(saved.id) }));
-      }
-      setForm(defaultKnowledgeBaseForm());
-      setCreateOpen(false);
-    } catch (err) {
-      setProfileError(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const selectedKb = useMemo(() => {
-    return knowledgeBases.find((kb) => kb.id === activeKbId) || null;
-  }, [knowledgeBases, activeKbId]);
-
-  return (
-    <div className="content-page knowledge-home-page">
-      {viewMode === 'list' ? (
-        <KnowledgeDashboard
-          knowledgeBases={knowledgeBases}
-          deleteKnowledgeBase={deleteKnowledgeBase}
-          openCreate={openCreate}
-          onSelectKb={handleSelectKb}
-          notify={notify}
-        />
-      ) : (
-        <KnowledgeWorkspace
-          kb={selectedKb}
-          documents={documents}
-          deleteDocument={deleteDocument}
-          updateKnowledgeBase={updateKnowledgeBase}
-          uploadDocument={uploadDocument}
-          uploadKnowledgeFile={uploadKnowledgeFile}
-          uploadingKnowledgeFile={uploadingKnowledgeFile}
-          uploadingFileName={uploadingFileName}
-          docForm={docForm}
-          setDocForm={setDocForm}
-          handleBack={handleBack}
-          activeDoc={activeDoc}
-          setActiveDoc={setActiveDoc}
-          setResegmentOpen={setResegmentOpen}
-          token={token}
-        />
-      )}
-
-      {createOpen && (
-        <KnowledgeBaseDialog
-          form={form}
-          onCancel={closeCreate}
-          onChange={setForm}
-          onSubmit={submitKnowledgeBase}
-          saving={saving}
-        />
-      )}
-
-      {resegmentOpen && activeDoc && (
-        <ResegmentModal
-          isOpen={resegmentOpen}
-          onClose={() => setResegmentOpen(false)}
-          kbId={activeKbId}
-          doc={activeDoc}
-          token={token}
-          onResegmentSuccess={async () => {
-            setResegmentOpen(false);
-            if (activeKbId && loadDocuments) {
-              await loadDocuments(activeKbId);
-            }
-          }}
-          notify={notify}
-        />
-      )}
     </div>
   );
 }
@@ -2974,310 +3167,6 @@ function ProfileDialog({
         </div>
         <button className="danger-action" type="button" onClick={() => { onClose(); logout(); }}><LogOut size={15} />退出登录</button>
       </section>
-    </div>
-  );
-}
-
-function UserModelsHome({ adminModels, canManage, createModelConfig, deleteModelConfig, requestDeleteConfirm, setProfileError, updateModelConfig, ...userModelProps }) {
-  return (
-    <div className="content-page">
-      <header className="page-heading">
-        <div>
-          <h1>我的模型</h1>
-          <p>维护你自己的 OpenAI-compatible 模型连接，保存后可在智能体配置里选择。</p>
-        </div>
-      </header>
-      <UserModelsPanel requestDeleteConfirm={requestDeleteConfirm} setProfileError={setProfileError} {...userModelProps} />
-      {canManage && (
-        <ModelAdminPanel
-          createModelConfig={createModelConfig}
-          deleteModelConfig={deleteModelConfig}
-          models={adminModels}
-          requestDeleteConfirm={requestDeleteConfirm}
-          setProfileError={setProfileError}
-          updateModelConfig={updateModelConfig}
-        />
-      )}
-    </div>
-  );
-}
-
-function ToolsHome({ createToolConfig, deleteToolConfig, openBuilder, requestDeleteConfirm, setProfileError, testToolConfig, tools, updateToolConfig }) {
-  return (
-    <div className="content-page">
-      <header className="page-heading">
-        <div>
-          <h1>工具</h1>
-          <p>管理可绑定到智能体的内置搜索和 HTTP 工具。密钥只在保存时提交，保存后仅显示 has_secret 状态。</p>
-        </div>
-        <button className="primary" type="button" onClick={openBuilder}><Bot size={16} />打开 Builder</button>
-      </header>
-      <ToolsPanel
-        createToolConfig={createToolConfig}
-        deleteToolConfig={deleteToolConfig}
-        requestDeleteConfirm={requestDeleteConfirm}
-        setProfileError={setProfileError}
-        testToolConfig={testToolConfig}
-        tools={tools}
-        updateToolConfig={updateToolConfig}
-      />
-    </div>
-  );
-}
-
-function ResourceLibraryHome({
-  activeAgentId,
-  agentForm,
-  copyBuiltinPromptTemplate,
-  createPromptTemplate,
-  deletePromptTemplate,
-  knowledgeBases,
-  openBuilder,
-  promptTemplates,
-  requestDeleteConfirm,
-  setActiveNav,
-  setAgentForm,
-  setProfileError,
-  setView,
-  tools,
-  updatePromptTemplate,
-}) {
-  const [tab, setTab] = useState('all');
-  const [query, setQuery] = useState('');
-  const [selectedTemplate, setSelectedTemplate] = useState(promptTemplates[0] || null);
-  const [editingTemplate, setEditingTemplate] = useState(null);
-  const [form, setForm] = useState(() => defaultPromptTemplateForm());
-  const [formOpen, setFormOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState('');
-
-  useEffect(() => {
-    if (!selectedTemplate && promptTemplates.length) {
-      setSelectedTemplate(promptTemplates[0]);
-    } else if (selectedTemplate && !promptTemplates.some((item) => item.id === selectedTemplate.id)) {
-      setSelectedTemplate(promptTemplates[0] || null);
-    }
-  }, [promptTemplates, selectedTemplate?.id]);
-
-  const filteredTemplates = filterPromptTemplates(promptTemplates, query);
-  const filteredTools = filterResourceItems(tools, query, (tool) => `${tool.label || ''} ${tool.name || ''} ${tool.description || ''}`);
-  const filteredKnowledge = filterResourceItems(knowledgeBases, query, (kb) => `${kb.name || ''} ${kb.description || ''}`);
-  const showPrompts = tab === 'all' || tab === 'prompts';
-  const showTools = tab === 'all' || tab === 'tools';
-  const showKnowledge = tab === 'all' || tab === 'knowledge';
-
-  function insertTemplate(template) {
-    if (!template?.content) return;
-    insertPromptIntoAgent(setAgentForm, template.content);
-    setSelectedTemplate(template);
-    setNotice('模板已插入当前智能体 Prompt。');
-  }
-
-  function openCreate(template = null) {
-    setEditingTemplate(null);
-    setForm(template ? formFromPromptTemplate(template, { title: `${template.title} 副本` }) : defaultPromptTemplateForm());
-    setNotice('');
-    setFormOpen(true);
-  }
-
-  function openEdit(template) {
-    setEditingTemplate(template);
-    setForm(formFromPromptTemplate(template));
-    setSelectedTemplate(template);
-    setNotice('');
-    setFormOpen(true);
-  }
-
-  function closeTemplateForm() {
-    if (saving) return;
-    setFormOpen(false);
-    setEditingTemplate(null);
-    setForm(defaultPromptTemplateForm());
-  }
-
-  async function saveTemplate(event) {
-    event.preventDefault();
-    setSaving(true);
-    setNotice('');
-    setProfileError('');
-    try {
-      const payload = promptTemplateFormPayload(form);
-      const saved = editingTemplate?.db_id
-        ? await updatePromptTemplate(editingTemplate.db_id, payload)
-        : await createPromptTemplate(payload);
-      setEditingTemplate(null);
-      setForm(defaultPromptTemplateForm());
-      setFormOpen(false);
-      setSelectedTemplate(saved);
-      setNotice('提示词模板已保存。');
-    } catch (err) {
-      setProfileError(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function copyBuiltin(template) {
-    if (!template?.id) return;
-    setSaving(true);
-    setNotice('');
-    setProfileError('');
-    try {
-      const copied = await copyBuiltinPromptTemplate({
-        builtin_id: template.id.replace('builtin:', ''),
-        title: `${template.title} 副本`,
-      });
-      setSelectedTemplate(copied);
-      setNotice('已复制为我的模板。');
-    } catch (err) {
-      setProfileError(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function removeTemplate(template) {
-    if (!template?.db_id) return;
-    const confirmed = await requestDeleteConfirm({
-      title: '删除提示词模板',
-      message: `删除「${template.title}」？`,
-      detail: '删除后，资源库和 Builder 模板区都不再显示该模板。',
-      confirmLabel: '删除模板',
-    });
-    if (!confirmed) return;
-    setSaving(true);
-    setNotice('');
-    setProfileError('');
-    try {
-      await deletePromptTemplate(template.db_id);
-      setSelectedTemplate(null);
-      setNotice('模板已删除。');
-    } catch (err) {
-      setProfileError(errorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="content-page resource-page">
-      <header className="page-heading resource-heading">
-        <div>
-          <h1>资源库</h1>
-          <p>管理当前可用资源。这里暂只展示已实现的插件、知识库和提示词。</p>
-        </div>
-        <div className="resource-actions">
-          <label className="resource-search">
-            <Search size={16} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索资源" />
-          </label>
-          <button className="primary" type="button" onClick={() => openCreate()}><Plus size={15} />新建提示词</button>
-        </div>
-      </header>
-
-      <div className="resource-tabs">
-        {[
-          ['all', '全部'],
-          ['tools', '插件'],
-          ['knowledge', '知识库'],
-          ['prompts', '提示词'],
-        ].map(([key, label]) => (
-          <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>
-        ))}
-      </div>
-
-      <div className="resource-layout">
-        <section className="resource-list-panel">
-          {showPrompts && (
-            <ResourceSection
-              title="提示词"
-              count={filteredTemplates.length}
-              emptyText="暂无提示词模板"
-            >
-              {filteredTemplates.map((template) => (
-                <ResourceRow
-                  key={template.id}
-                  icon={<FileText size={17} />}
-                  title={template.title}
-                  desc={template.description || template.content}
-                  type={template.source === 'builtin' ? '预置提示词' : '我的提示词'}
-                  meta={template.category || 'general'}
-                  active={selectedTemplate?.id === template.id}
-                  onClick={() => setSelectedTemplate(template)}
-                  actions={
-                    <>
-                      <button type="button" onClick={(event) => { event.stopPropagation(); setSelectedTemplate(template); }}>预览</button>
-                      <button type="button" onClick={(event) => { event.stopPropagation(); insertTemplate(template); }}>插入</button>
-                      {template.source === 'builtin' && <button type="button" disabled={saving} onClick={(event) => { event.stopPropagation(); copyBuiltin(template); }}>复制</button>}
-                      {template.editable && <button type="button" disabled={saving} onClick={(event) => { event.stopPropagation(); openEdit(template); }}>编辑</button>}
-                      {template.editable && <button type="button" disabled={saving} onClick={(event) => { event.stopPropagation(); removeTemplate(template); }}>删除</button>}
-                    </>
-                  }
-                />
-              ))}
-            </ResourceSection>
-          )}
-
-          {showTools && (
-            <ResourceSection title="插件" count={filteredTools.length} emptyText="暂无插件">
-              {filteredTools.map((tool) => (
-                <ResourceRow
-                  key={`tool-${tool.id}`}
-                  icon={<Wand2 size={17} />}
-                  title={tool.label || tool.name}
-                  desc={tool.description || tool.name}
-                  type="插件"
-                  meta={`${toolType(tool)} · ${tool.enabled === false ? '停用' : '启用'}`}
-                  actions={<button type="button" onClick={() => setActiveNav('tools')}>管理</button>}
-                />
-              ))}
-            </ResourceSection>
-          )}
-
-          {showKnowledge && (
-            <ResourceSection title="知识库" count={filteredKnowledge.length} emptyText="暂无知识库">
-              {filteredKnowledge.map((kb) => (
-                <ResourceRow
-                  key={`kb-${kb.id}`}
-                  icon={<Database size={17} />}
-                  title={kb.name}
-                  desc={kb.description || `${kb.document_count || 0} 个文档`}
-                  type="知识库"
-                  meta={`${kb.document_count || 0} 文档`}
-                  actions={<button type="button" onClick={() => setActiveNav('knowledge')}>管理</button>}
-                />
-              ))}
-            </ResourceSection>
-          )}
-        </section>
-
-        <aside className="resource-detail-panel">
-          <PromptTemplatePreview
-            activeAgentId={activeAgentId}
-            template={selectedTemplate}
-            onInsert={insertTemplate}
-            onCopy={copyBuiltin}
-            onEdit={openEdit}
-            onDelete={removeTemplate}
-            saving={saving}
-          />
-          <section className="resource-side-actions">
-            <button type="button" onClick={() => { setView('builder'); openBuilder(); }}>打开 Builder</button>
-            <button className="primary-model-action" type="button" onClick={() => openCreate()}><Plus size={15} />新建模板</button>
-          </section>
-        </aside>
-      </div>
-      {notice && <p className="model-row-warning floating-notice">{notice}</p>}
-      {formOpen && (
-        <PromptTemplateDialog
-          editingTemplate={editingTemplate}
-          form={form}
-          onCancel={closeTemplateForm}
-          onChange={setForm}
-          onSubmit={saveTemplate}
-          saving={saving}
-        />
-      )}
     </div>
   );
 }

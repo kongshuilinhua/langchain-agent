@@ -73,12 +73,8 @@ function normalizeAgentIdentity(identity = {}) {
 // Phase 4: imported from lib/memory.js
 import { defaultMemoryProfile, normalizeMemoryProfile, profileToDraft, draftFacts, memoryProfilePayload, parsePreferences, safeJsonPreview, isPlainObject, isJsonCompatiblePreference } from './lib/memory.js';
 
-function formatDateTime(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString();
-}
+// imported from lib/format.js
+import { formatDateTime } from './lib/format.js';
 
 function defaultAgentForm() {
   return {
@@ -234,19 +230,11 @@ function normalizeUserModelForUi(config) {
   };
 }
 
-function modelLabel(model) {
-  if (!model) return '';
-  return model.source === 'user' ? model.chat_model || model.model_name : model.model_name || model.chat_model || '';
-}
+// imported from lib/models.js
+import { modelLabel } from './lib/models.js';
 
-function modelCapabilityChips(model) {
-  if (!model) return [];
-  const chips = [];
-  if (model.supports_text !== false) chips.push('文本');
-  chips.push('图片可发送');
-  chips.push('文档附件后端解析');
-  return chips.length ? chips : ['未声明能力'];
-}
+// imported from lib/models.js
+import { modelCapabilityChips } from './lib/models.js';
 
 function reasoningCapabilityForModel(model) {
   if (!model) {
