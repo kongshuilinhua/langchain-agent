@@ -24,7 +24,7 @@ import { AgentAvatar } from '../components/AgentAvatar.jsx';
 import { PromptTemplateDialog } from '../components/PromptTemplateDialog.jsx';
 import { KnowledgeBaseDialog } from '../components/KnowledgeBaseDialog.jsx';
 import { KnowledgeDocumentList, KnowledgeUploadBox } from '../components/KnowledgeDocumentList.jsx';
-import { ChatComposer } from './ChatView.jsx';
+import { ChatComposer } from '../components/chat/ChatComposer.jsx';
 import {
   findModelForForm,
   modelCapabilityWarning,
