@@ -11,7 +11,7 @@ from api.schemas import (
     UserModelConfigRequest,
     UserModelConfigUpdateRequest,
 )
-from core.db.models import ModelConfig, User, UserModelConfig, WorkspaceMember
+from core.db.models import ModelConfig, User, WorkspaceMember
 from core.db.session import get_db
 from core.security.permissions import can_manage
 from core.services.bootstrap import ensure_default_models

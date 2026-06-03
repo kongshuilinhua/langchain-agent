@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import time
@@ -41,6 +40,17 @@ from core.integrations.llm import DASHSCOPE_COMPATIBLE_BASE, OPENAI_COMPATIBLE_D
 from core.integrations.vector_store import vector_store
 from core.security.api_keys import secret_storage_ready
 from core.services.rag_cache import redis_store
+
+from api.routes.auth import router as auth_router
+from api.routes.workspace import router as workspace_router
+from api.routes.agents import router as agents_router
+from api.routes.knowledge import router as knowledge_router
+from api.routes.tools import router as tools_router
+from api.routes.models import router as models_router
+from api.routes.prompts import router as prompts_router
+from api.routes.admin import router as admin_router
+from api.routes.chat import router as chat_router
+from api.routes.search import router as search_router
 
 # ── 应用初始化 ────────────────────────────────────────────
 
@@ -252,17 +262,6 @@ def _sanitize_public_error(message: str) -> str:
 
 
 # ── 路由挂载 ──────────────────────────────────────────────
-
-from api.routes.auth import router as auth_router
-from api.routes.workspace import router as workspace_router
-from api.routes.agents import router as agents_router
-from api.routes.knowledge import router as knowledge_router
-from api.routes.tools import router as tools_router
-from api.routes.models import router as models_router
-from api.routes.prompts import router as prompts_router
-from api.routes.admin import router as admin_router
-from api.routes.chat import router as chat_router
-from api.routes.search import router as search_router
 
 app.include_router(auth_router)
 app.include_router(workspace_router)

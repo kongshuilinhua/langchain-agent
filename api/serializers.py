@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from core.db.models import (
     Agent,
     AgentVersion,
-    KnowledgeBase,
     Message,
     Session as ChatSessionModel,
     User,

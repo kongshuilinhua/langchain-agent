@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
@@ -374,8 +376,6 @@ def get_db():
     finally:
         db.close()
 
-
-import re
 
 # 🛡️ DDL 标识符白名单正则：仅允许标准 SQL 标识符字符
 _VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")

@@ -12,6 +12,7 @@
 
 import hashlib
 import hmac
+import json
 import os
 import time
 import uuid
@@ -81,8 +82,6 @@ def verify_password(password: str, stored: str) -> bool:
 # 🎯 设计决策：手动实现 JWT 而非使用 PyJWT 库
 # 原因：减少第三方依赖、完全掌控安全边界、代码量极小（<30行核心逻辑）
 # 局限：仅支持 HS256，若需 RS256 非对称签名或 JWK 密钥轮转则应引入标准库
-
-import json
 
 
 def create_access_token(data: dict) -> str:

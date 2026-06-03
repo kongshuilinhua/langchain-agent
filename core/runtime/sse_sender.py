@@ -19,7 +19,7 @@
 """
 
 import threading
-from typing import Any, Callable
+from typing import Callable
 
 
 class SseSender:

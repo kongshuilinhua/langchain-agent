@@ -161,7 +161,7 @@ def chat_stream(agent_id: int, request: ChatRequest, membership: WorkspaceMember
 def list_agent_sessions(agent_id: int, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
     agent = require_workspace_agent(db, membership.workspace_id, agent_id)
     require_agent_read_access(agent, membership)
-    query = db.query(ChatSession).filter(ChatSession.workspace_id == membership.workspace_id, ChatSession.agent_id == agent.id, ChatSession.is_debug == False)
+    query = db.query(ChatSession).filter(ChatSession.workspace_id == membership.workspace_id, ChatSession.agent_id == agent.id, ChatSession.is_debug.is_(False))
     if not can_manage(membership.role):
         query = query.filter(ChatSession.user_id == membership.user_id)
     sessions = query.order_by(ChatSession.updated_at.desc()).all()

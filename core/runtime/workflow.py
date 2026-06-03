@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from core.db.models import (
     Agent,
     AgentKnowledgeBase,
-    AgentTool,
     AgentVersion,
     ModelConfig,
     Run,
@@ -20,7 +19,6 @@ from core.db.models import (
     Tool,
     UserModelConfig,
     Upload,
-    WorkflowDefinition,
 )
 from core.integrations.llm import OpenAICompatibleProvider
 from core.services.agents import get_agent_detail, normalize_memory, normalize_rag, normalize_tool_policy

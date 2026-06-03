@@ -1,28 +1,29 @@
 from __future__ import annotations
 
+import ast
 import ipaddress
 import json
 import math as _math
 import operator as _operator
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timezone as _timezone
 
 import random
 import string
 import uuid
-import base64
-import hashlib
 import httpx
 import re
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from core.db.models import Agent, AgentTool, Tool
+from core.db.models import AgentTool, Tool
 from core.security.api_keys import decrypt_api_key, encrypt_api_key
 from core.services import web_search as web_search_service
 
@@ -49,9 +50,6 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),           # IPv6 link-local
 ]
 CLOUD_METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
-
-import threading
-from contextlib import contextmanager
 
 # 🎯 线程本地存储（Thread-Local Storage）：用于保障高并发请求下 DNS Pinning 独立工作，防止线程串扰
 _local_dns_pinning = threading.local()
@@ -654,9 +652,6 @@ def _exec_current_time(args: dict) -> dict:
     return {"content": text, "result_preview": formatted}
 
 
-import ast
-
-
 class SafeEvalVisitor(ast.NodeVisitor):
     """
     🛡️ 极客级沙箱数学求解器（AST 语法树解构安全执行器）。
@@ -753,7 +748,7 @@ def _exec_calculator(args: dict) -> dict:
         }
         visitor = SafeEvalVisitor(_BUILTIN_FUNCS, allowed_ops)
         tree = ast.parse(sanitized, mode="eval")
-        result = tree_result = visitor.visit(tree)
+        result = visitor.visit(tree)
         if not isinstance(result, (int, float)):
             raise ValueError("Expression evaluated to a non-numeric result")
     except Exception as exc:
@@ -889,9 +884,9 @@ def _exec_image_search(args: dict) -> dict:
     if not query:
         return {"content": json.dumps({"error": "Query cannot be empty"}), "result_preview": "Error: Empty Query"}
     images = [
-        {"url": f"https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=800&q=80", "title": f"Abstract colored mesh for {query}"},
-        {"url": f"https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&q=80", "title": f"Deep space nebula for {query}"},
-        {"url": f"https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&q=80", "title": f"Electronics hardware tech for {query}"}
+        {"url": "https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=800&q=80", "title": f"Abstract colored mesh for {query}"},
+        {"url": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&q=80", "title": f"Deep space nebula for {query}"},
+        {"url": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&q=80", "title": f"Electronics hardware tech for {query}"}
     ][:count]
     payload = {"query": query, "images": images}
     return {"content": json.dumps(payload, ensure_ascii=False), "result_preview": f"Found {len(images)} images"}

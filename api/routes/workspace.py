@@ -19,7 +19,7 @@ from api.serializers import (
 from core.config import get_settings
 from core.db.models import WorkspaceInvite, WorkspaceMember
 from core.db.session import get_db
-from core.security.permissions import normalize_role, can_manage
+from core.security.permissions import normalize_role
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 settings = get_settings()

@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from api.access import invite_workspace
 from api.deps import get_current_membership, get_current_user
 from api.schemas import (
-    InviteAcceptRequest,
     LoginRequest,
     RegisterRequest,
     UserProfileUpdateRequest,

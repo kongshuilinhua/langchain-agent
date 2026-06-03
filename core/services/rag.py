@@ -4,8 +4,8 @@ import hashlib
 import json
 import math
 import re
+import threading
 from dataclasses import dataclass
-from typing import Iterable
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -18,8 +18,6 @@ from core.services.rag_cache import redis_store
 
 # 🧠 魔鬼数字：BM25 构建分批批次大小，防止全表读取导致的高内存开销与游标挂起
 BM25_BATCH_SIZE = 1000
-
-import threading
 
 # 🎯 线程安全的全局内存缓存（BM25 索引热加载缓存器）
 # 物理哈希格式 Key: (frozenset(knowledge_base_ids), version_hash) -> Value: (compiled_bm25_index, rows_data)

@@ -7,7 +7,7 @@ import ssl
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from core.config import get_settings
 from core.integrations.circuit_breaker import CircuitBreaker
