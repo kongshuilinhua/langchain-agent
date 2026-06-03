@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+﻿const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 const KNOWLEDGE_FILE_ACCEPT = '.txt,.md,.markdown,.csv,.pdf,.docx';
 const KNOWLEDGE_FILE_EXTENSIONS = ['txt', 'md', 'markdown', 'csv', 'pdf', 'docx'];
@@ -32,19 +32,6 @@ function initialAuthToken() {
   }
   return token;
 }
-
-const JIGE_PROMPT = [
-  '你将扮演一个人物角色，请根据角色设定回答用户问题。',
-  '角色：热情、活泼，喜欢 rap 和篮球的练习生。',
-  '要求：使用第一人称，语气生动，必要时可加入动作和神态描写。',
-].join('\n');
-
-const SAMPLE_MESSAGES = [
-  { role: 'user', content: '篮球和 rap 的相似之处是什么？' },
-  { role: 'assistant', content: '它们都需要节奏感、专注和表现力。运球像 flow，投篮像压拍，关键是稳准和自信。' },
-  { role: 'user', content: '你最喜欢的篮球明星是谁？' },
-  { role: 'assistant', content: '我喜欢斯蒂芬·库里，因为他的节奏、判断和出手都很适合用来比喻舞台表演。' },
-];
 
 function roleLabel(role) {
   return isAdminRole(role) ? '管理员' : '普通用户';
@@ -105,6 +92,19 @@ async function api(path, { method = 'GET', token, body } = {}) {
   }
   return data;
 }
+
+const JIGE_PROMPT = [
+  '你将扮演一个人物角色，请根据角色设定回答用户问题。',
+  '角色：热情、活泼，喜欢 rap 和篮球的练习生。',
+  '要求：使用第一人称，语气生动，必要时可加入动作和神态描写。',
+].join('\n');
+
+const SAMPLE_MESSAGES = [
+  { role: 'user', content: '篮球和 rap 的相似之处是什么？' },
+  { role: 'assistant', content: '它们都需要节奏感、专注和表现力。运球像 flow，投篮像压拍，关键是稳准和自信。' },
+  { role: 'user', content: '你最喜欢的篮球明星是谁？' },
+  { role: 'assistant', content: '我喜欢斯蒂芬·库里，因为他的节奏、判断和出手都很适合用来比喻舞台表演。' },
+];
 
 function createAvatarDataUrl(file) {
   return new Promise((resolve, reject) => {
