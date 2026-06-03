@@ -25,12 +25,6 @@ target_metadata = Base.metadata
 # 从项目配置中读取数据库 URL（替代 alembic.ini 中的硬编码）
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)
-target_metadata = None
-
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
 
 
 def run_migrations_offline() -> None:

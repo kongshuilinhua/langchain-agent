@@ -2156,7 +2156,7 @@ function AgentIdentityDialog({ error, initialForm, mode, onCancel, onSubmit, sav
   );
 }
 
-function ConfirmDialog({ cancelLabel = '取消', confirmLabel = '删除', detail = '', message, onCancel, onConfirm, title, tone = 'danger' }) {
+function ConfirmDialog({ cancelLabel ='取消', confirmLabel = '删除', detail = '', message, onCancel, onConfirm, title, tone = 'danger' }) {
   useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') onCancel();

@@ -112,8 +112,10 @@ async def health():
 
     # 🎯 Phase 5: 三个独立探针并行执行（DB / Chat / Embedding）
     db_future = loop.run_in_executor(None, _probe_database)
-    chat_future = loop.run_in_executor(None, _model_probe, "chat", bool(settings.health_model_probe_enabled and not model_mock))
-    embed_future = loop.run_in_executor(None, _model_probe, "embedding", bool(settings.health_model_probe_enabled and not embedding_mock and embedding_model))
+    chat_enabled = bool(settings.health_model_probe_enabled and not model_mock)
+    embed_enabled = bool(settings.health_model_probe_enabled and not embedding_mock and embedding_model)
+    chat_future = loop.run_in_executor(None, lambda: _model_probe("chat", enabled=chat_enabled))
+    embed_future = loop.run_in_executor(None, lambda: _model_probe("embedding", enabled=embed_enabled))
     database_status = await db_future
     model_probe = await chat_future
     embedding_probe = await embed_future
