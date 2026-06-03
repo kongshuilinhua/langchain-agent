@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -93,7 +94,9 @@ def startup() -> None:
 # ── 健康检查 ──────────────────────────────────────────────
 
 @app.get("/api/health")
-def health():
+async def health():
+    """系统就绪度与依赖健康性自检大盘。Phase 5: DB + Chat + Embedding 三路探针并行执行。"""
+    loop = asyncio.get_running_loop()
     provider = OpenAICompatibleProvider()
     chat_api_key = provider._api_key(settings, purpose="chat")
     embedding_api_key = provider._api_key(settings, purpose="embedding")
@@ -106,14 +109,17 @@ def health():
     embedding_base = provider._api_base(settings, purpose="embedding")
     embedding_mock = settings.mock_llm
     embedding_model = (settings.openai_embedding_model or "").strip()
+
+    # 🎯 Phase 5: 三个独立探针并行执行（DB / Chat / Embedding）
+    db_future = loop.run_in_executor(None, _probe_database)
+    chat_future = loop.run_in_executor(None, _model_probe, "chat", bool(settings.health_model_probe_enabled and not model_mock))
+    embed_future = loop.run_in_executor(None, _model_probe, "embedding", bool(settings.health_model_probe_enabled and not embedding_mock and embedding_model))
+    database_status = await db_future
+    model_probe = await chat_future
+    embedding_probe = await embed_future
+
     issues = []
-    database_status = {"configured": bool(settings.database_url), "available": False, "error": None}
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-        database_status["available"] = True
-    except Exception as exc:
-        database_status["error"] = str(exc)[:240]
+    if not database_status["available"]:
         issues.append("Database is configured but not reachable.")
     if not secret_storage_ready():
         issues.append("API_KEY_ENCRYPTION_KEY is required before storing user model keys or tool secrets.")
@@ -121,8 +127,6 @@ def health():
         issues.append("Database initialization failed during startup.")
     redis_status = redis_store.status()
     vector_status = vector_store.status()
-    model_probe = _model_probe("chat", enabled=bool(settings.health_model_probe_enabled and not model_mock))
-    embedding_probe = _model_probe("embedding", enabled=bool(settings.health_model_probe_enabled and not embedding_mock and embedding_model))
     if model_mock:
         issues.append("Chat model is running in mock mode because LINGSHU_MOCK_LLM is true.")
     elif not chat_api_key:
@@ -177,6 +181,18 @@ def health():
             "secret_storage": {"configured": secret_storage_ready()},
         },
     }
+
+
+def _probe_database() -> dict:
+    """Phase 5: 独立数据库探针，供 health() 并行调用。"""
+    status = {"configured": bool(settings.database_url), "available": False, "error": None}
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        status["available"] = True
+    except Exception as exc:
+        status["error"] = str(exc)[:240]
+    return status
 
 
 def _model_probe(purpose: str, *, enabled: bool) -> dict:
