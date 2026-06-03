@@ -53,6 +53,7 @@ import { fetchAgents, fetchMarketAgents, fetchReviews } from './api/agents.js';
 import { fetchKnowledgeBases, fetchTools, fetchModels, fetchUserModels, fetchPromptTemplates, fetchMembers } from './api/resources.js';
 import { useAuthStore } from './store/useAuthStore.js';
 import { useAgentStore } from './store/useAgentStore.js';
+import { useChatStore } from './store/useChatStore.js';
 // ── 原有 utils.js 导入（逐步迁移到 lib/ 后删除）──
 import {
   API_BASE,
@@ -152,33 +153,19 @@ function App() {
   const [runtimeStatus, setRuntimeStatus] = useState(() => defaultRuntimeStatus());
   const [marketAgents, setMarketAgents] = useState([]);
   const [reviewItems, setReviewItems] = useState([]);
-  const [members, setMembers] = useState([]);
-  const [sessions, setSessions] = useState([]);
-  const [activeSessionId, setActiveSessionId] = useState(null);
-  const [sessionTitleDraft, setSessionTitleDraft] = useState('');
-  const [messages, setMessages] = useState([]);
-  const [sources, setSources] = useState([]);
-  const [toolDebugEvents, setToolDebugEvents] = useState([]);
+  // Phase 4: Zustand chat store replaces 19 useState calls
+  const {
+    sessions, activeSessionId, sessionTitleDraft, messages, sources, toolDebugEvents,
+    feedbackByMessage, chatMode, chatVariables, ragEnabled, thinkingEnabled, searchEnabled,
+    chatAttachments, uploadingAttachment, draft, busy, error, homePrompt,
+    setSessions, setActiveSessionId, setSessionTitleDraft, setMessages, setSources,
+    setToolDebugEvents, setFeedbackByMessage, setChatMode, setChatVariables,
+    setRagEnabled, setThinkingEnabled, setSearchEnabled, setChatAttachments,
+    setUploadingAttachment, setDraft, setBusy, setError, setHomePrompt,
+    startNewChat: storeStartNewChat, sendMessage: storeSendMessage,
+  } = useChatStore();
   const [documents, setDocuments] = useState([]);
-  const [feedbackByMessage, setFeedbackByMessage] = useState({});
-  const [chatMode, setChatMode] = useState('published');
-  const [chatVariables, setChatVariables] = useState({});
-  const [ragEnabled, setRagEnabled] = useState(true);
-  const [thinkingEnabled, setThinkingEnabled] = useState(false);
-  const [searchEnabled, setSearchEnabled] = useState(false);
-  const [chatAttachments, setChatAttachments] = useState([]);
-  const [uploadingAttachment, setUploadingAttachment] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const [toastMsg, setToastMsg] = useState('');
-
-  function notify(msg) {
-    setToastMsg(msg);
-    setTimeout(() => {
-      setToastMsg((current) => current === msg ? '' : current);
-    }, 3000);
-  }
   const [authMode, setAuthMode] = useState('register');
   const [authForm, setAuthForm] = useState({ email: 'admin@example.com', name: 'Admin', password: 'password123' });
   const [docForm, setDocForm] = useState({ filename: 'guide.txt', text: '这里是一段知识库资料。', kb_id: '' });
@@ -186,7 +173,6 @@ function App() {
   const [uploadingFileName, setUploadingFileName] = useState('');
   const [view, setView] = useState('home');
   const [activeNav, setActiveNav] = useState('chat');
-  const [homePrompt, setHomePrompt] = useState('');
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [profileError, setProfileError] = useState('');
