@@ -51,6 +51,8 @@ import './styles.css';
 // Phase 4: api/ client modules
 import { fetchAgents, fetchMarketAgents, fetchReviews } from './api/agents.js';
 import { fetchKnowledgeBases, fetchTools, fetchModels, fetchUserModels, fetchPromptTemplates, fetchMembers } from './api/resources.js';
+import { useAuthStore } from './store/useAuthStore.js';
+import { useAgentStore } from './store/useAgentStore.js';
 // ── 原有 utils.js 导入（逐步迁移到 lib/ 后删除）──
 import {
   API_BASE,
@@ -137,12 +139,10 @@ import {
 } from './utils.js';
 
 function App() {
-  const [token, setToken] = useState(initialAuthToken);
-  const [me, setMe] = useState(null);
-  const [workspace, setWorkspace] = useState(null);
-  const [agents, setAgents] = useState([]);
-  const [activeAgentId, setActiveAgentId] = useState(null);
-  const [activeAgent, setActiveAgent] = useState(null);
+  // Phase 4: Zustand auth store replaces useState(token/me/workspace)
+  const { token, me, workspace, setToken, logout: storeLogout, bootstrap: storeBootstrap } = useAuthStore();
+  // Phase 4: Zustand agent store
+  const { agents, activeAgentId, activeAgent, agentForm, setActiveAgentId, setAgents, setAgentForm, loadAgent: storeLoadAgent, saveAgent: storeSaveAgent } = useAgentStore();
   const [knowledgeBases, setKnowledgeBases] = useState([]);
   const [tools, setTools] = useState([]);
   const [promptTemplates, setPromptTemplates] = useState([]);
@@ -181,7 +181,6 @@ function App() {
   }
   const [authMode, setAuthMode] = useState('register');
   const [authForm, setAuthForm] = useState({ email: 'admin@example.com', name: 'Admin', password: 'password123' });
-  const [agentForm, setAgentForm] = useState(defaultAgentForm());
   const [docForm, setDocForm] = useState({ filename: 'guide.txt', text: '这里是一段知识库资料。', kb_id: '' });
   const [uploadingKnowledgeFile, setUploadingKnowledgeFile] = useState(false);
   const [uploadingFileName, setUploadingFileName] = useState('');
@@ -333,10 +332,8 @@ function App() {
   }
 
   async function bootstrap() {
-    const profile = await api('/api/auth/me', { token });
-    setMe(profile.user);
-    const ws = await api('/api/workspaces/current', { token });
-    setWorkspace(ws.workspace);
+    await storeBootstrap();  // Phase 4: Zustand loads token/me/workspace
+    const { token, me, workspace } = useAuthStore.getState();
     const [health, agentList, kbList, toolList, modelList, userModelList, marketList, reviewList, promptTemplateList, memberList] = await Promise.all([
       api('/api/health').catch(() => defaultRuntimeStatus()),
       fetchAgents(token),
@@ -374,14 +371,10 @@ function App() {
   }
 
   function logout() {
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-    localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
-    setToken('');
-    setMe(null);
-    setWorkspace(null);
+    storeLogout();  // Phase 4: Zustand handles token/me/workspace cleanup
     setAgents([]);
     setActiveAgentId(null);
-    setActiveAgent(null);
+    useAgentStore.getState().setActiveAgent(null);
     setKnowledgeBases([]);
     setTools([]);
     setPromptTemplates([]);
@@ -427,32 +420,13 @@ function App() {
       : { email: authForm.email, password: authForm.password };
     const data = await api(path, { method: 'POST', body: payload });
     localStorage.setItem(AUTH_TOKEN_KEY, data.access_token);
-    setToken(data.access_token);
+    useAuthStore.getState().setToken(data.access_token);
   }
 
   async function loadAgent(agentId) {
-    const data = await api(`/api/agents/${agentId}`, { token });
-    const agent = data.agent;
-    setActiveAgent(agent);
-    setAgentForm({
-      name: agent.name || '',
-      avatar: agent.avatar || 'AI',
-      description: agent.description || '',
-      opening_message: agent.opening_message || '',
-      system_prompt: agent.system_prompt || '',
-      model_id: agent.model_id || agent.model_config?.id || '',
-      user_model_config_id: agent.user_model_config_id || agent.user_model_config?.id || '',
-      model: agent.model || '',
-      temperature: agent.temperature ?? 0.4,
-      knowledge_base_ids: agent.knowledge_base_ids || [],
-      tool_ids: (agent.tools || []).map((tool) => tool.id),
-      suggested_questions: agent.suggested_questions || [],
-      variables: agent.variables || [],
-      memory: agent.memory || { enabled: false, strategy: 'session_summary', max_messages: 12 },
-      rag: agent.rag || { enabled_by_default: true, top_k: 4 },
-      tool_policy: agent.tool_policy || { mode: 'auto', allowed_tool_names: [] },
-    });
-    setRagEnabled(agent.rag?.enabled_by_default ?? true);
+    await storeLoadAgent(agentId, token);  // Phase 4: Zustand loads agent + agentForm
+    const { activeAgent: agent, agentForm: form } = useAgentStore.getState();
+    setRagEnabled(form.rag?.enabled_by_default ?? true);
     setThinkingEnabled(false);
     setSearchEnabled(false);
     setChatVariables(initVariableValues(agent.variables || []));
@@ -593,7 +567,7 @@ function App() {
   async function updateProfile(patch) {
     setProfileError('');
     const data = await api('/api/auth/me', { token, method: 'PATCH', body: patch });
-    setMe(data.user);
+    useAuthStore.getState().setMe(data.user);
     return data.user;
   }
 
@@ -956,7 +930,7 @@ function App() {
     if (nextId) {
       await loadAgent(nextId);
     } else {
-      setActiveAgent(null);
+      useAgentStore.getState().setActiveAgent(null);
       setAgentForm(defaultAgentForm());
       setSessions([]);
     }
