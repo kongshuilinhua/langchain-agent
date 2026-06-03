@@ -1,5 +1,6 @@
 ﻿import React, { Component, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ResegmentModal } from './components/ResegmentModal.jsx';
@@ -47,13 +48,9 @@ import {
   X,
 } from 'lucide-react';
 import './styles.css';
-// ── Phase 4: lib/ 模块（渐进迁移目标，当前与 utils.js 并存）──
-import { API_BASE, AUTH_TOKEN_KEY, ApiError, isAuthError, notifyAuthExpired, initialAuthToken, errorMessage, api } from './lib/api.js';
-import { modelLabel, reasoningCapabilityForModel, findModelForForm, thinkingStatusText, modelCapabilityWarning, attachmentAcceptForModel, attachmentHintForModel } from './lib/models.js';
-import { getRagRuntime, ragStatusText, getWebSearchRuntime, webSearchStatusText, defaultRuntimeStatus } from './lib/rag.js';
-import { roleLabel, isAdminRole, statusLabel, formatDateTime } from './lib/format.js';
-import { fileToBase64, handleAttachmentInput, handleAttachmentPaste, handleAttachmentDrop } from './lib/upload.js';
-import { normalizeMemoryProfile, profileToDraft, memoryProfilePayload } from './lib/memory.js';
+// Phase 4: api/ client modules
+import { fetchAgents, fetchMarketAgents, fetchReviews } from './api/agents.js';
+import { fetchKnowledgeBases, fetchTools, fetchModels, fetchUserModels, fetchPromptTemplates, fetchMembers } from './api/resources.js';
 // ── 原有 utils.js 导入（逐步迁移到 lib/ 后删除）──
 import {
   API_BASE,
@@ -342,15 +339,15 @@ function App() {
     setWorkspace(ws.workspace);
     const [health, agentList, kbList, toolList, modelList, userModelList, marketList, reviewList, promptTemplateList, memberList] = await Promise.all([
       api('/api/health').catch(() => defaultRuntimeStatus()),
-      api('/api/agents', { token }),
-      api('/api/knowledge-bases', { token }),
-      api('/api/tools', { token }),
-      api('/api/models', { token }),
-      api('/api/user-models', { token }).catch(() => ({ items: [] })),
-      api('/api/market/agents', { token }).catch(() => ({ items: [] })),
-      api('/api/admin/agent-reviews', { token }).catch(() => ({ items: [] })),
-      api('/api/prompt-templates', { token }).catch(() => ({ items: [] })),
-      api('/api/workspaces/members', { token }).catch(() => ({ items: [] })),
+      fetchAgents(token),
+      fetchKnowledgeBases(token),
+      fetchTools(token),
+      fetchModels(false, token),
+      fetchUserModels(token).catch(() => ({ items: [] })),
+      fetchMarketAgents(token).catch(() => ({ items: [] })),
+      fetchReviews(token).catch(() => ({ items: [] })),
+      fetchPromptTemplates(false, token).catch(() => ({ items: [] })),
+      fetchMembers(token).catch(() => ({ items: [] })),
     ]);
     setAgents(agentList.items);
     setKnowledgeBases(kbList.items);
@@ -1420,6 +1417,7 @@ function App() {
   };
 
   return (
+    <BrowserRouter>
     <>
       {view === 'builder' ? <BuilderView {...builderProps} /> : <HomeView {...shellProps} />}
       {agentIdentityDialog && (
@@ -1448,6 +1446,7 @@ function App() {
       )}
       {toastMsg && <div className="toast success">{toastMsg}</div>}
     </>
+    </BrowserRouter>
   );
 }
 
