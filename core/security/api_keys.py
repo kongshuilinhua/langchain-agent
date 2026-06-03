@@ -14,6 +14,7 @@
 from cryptography.fernet import Fernet
 
 from core.config import get_settings
+from core.exceptions import AppException, ErrorCode
 
 
 def _fernet() -> Fernet:
@@ -24,10 +25,12 @@ def _fernet() -> Fernet:
         从 API_KEY_ENCRYPTION_KEY 环境变量获取。该密钥必须是 URL-safe Base64 编码的
         32 字节随机密钥（可通过 Fernet.generate_key() 生成）。
 
-    🛡️ 安全设计：
-        - 加密密钥与 JWT Secret 独立，即使 JWT 泄漏也不影响 API Key 安全
-        - 未配置时使用硬编码默认值：这是开发便利性与安全性的妥协，
-          生产环境 **必须** 通过环境变量覆盖，否则所有 API Key 等同于明文存储
+    🛡️ 安全设计（Fail-Fast）：
+        如果生产环境未配置 API_KEY_ENCRYPTION_KEY，直接抛出 AppException 阻断服务。
+        不再允许硬编码默认密钥兜底——之前版本中硬编码的 "pJ4FjjK5..." 默认值
+        意味着任何未配置该变量的部署都在以明文等效的方式存储用户的第三方 API Key。
+
+        参考 Ragent 的安全实践：所有密钥必须显式配置，框架层不做任何假设。
 
     ⚡ Fernet 特性：
         - AES-128-CBC 加密 + HMAC-SHA256 签名 = 同时保证机密性和完整性
@@ -35,9 +38,15 @@ def _fernet() -> Fernet:
         - 密文自包含：加密结果包含 IV + 密文 + HMAC，解密只需密钥
     """
     settings = get_settings()
-    # 🛡️ 默认密钥仅限开发环境，生产环境不设置此变量应视为配置错误
-    key = settings.api_key_encryption_key or "pJ4FjjK5LxJz7VwOqN_3kA6bT8xBv0bL1c2dF3eG4hI="
-    return Fernet(key.encode())
+    if not settings.api_key_encryption_key:
+        raise AppException(
+            ErrorCode.ENCRYPTION_NOT_CONFIGURED,
+            message="API_KEY_ENCRYPTION_KEY 未配置，无法安全存储用户的第三方 API 密钥。"
+                    "请运行: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                    "生成密钥并设置到环境变量中。",
+            status_code=503,
+        )
+    return Fernet(settings.api_key_encryption_key.encode())
 
 
 def encrypt_api_key(plaintext: str) -> str:
@@ -65,3 +74,13 @@ def decrypt_api_key(ciphertext: str) -> str:
         cryptography.fernet.InvalidToken: 密文损坏、密钥不匹配或密文被篡改时抛出
     """
     return _fernet().decrypt(ciphertext.encode()).decode()
+
+
+def secret_storage_ready() -> bool:
+    """
+    检查安全密钥存储是否已准备就绪。
+    如果配置了 API_KEY_ENCRYPTION_KEY，则返回 True。
+    用于健康检查端点判断是否可以安全存储用户的第三方 API Key。
+    """
+    settings = get_settings()
+    return bool(settings.api_key_encryption_key)

@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import os
 import time
+import uuid
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 
 from core.config import get_settings
@@ -91,20 +92,28 @@ def create_access_token(data: dict) -> str:
     🎯 工作原理：
         JWT 由三部分组成：Header.Payload.Signature
         - Header: 声明签名算法（HS256）
-        - Payload: 携带用户 ID(sub)、过期时间(exp) 等声明
+        - Payload: 携带标准 JWT 声明 + 业务声明
         - Signature: HMAC-SHA256(Header.Payload, secret)，保证完整性
+
+    🧠 标准声明（RFC 7519）：
+        - sub (Subject): 令牌主体，通常为用户 ID
+        - exp (Expiration Time): 过期时间戳
+        - nbf (Not Before): 生效时间，允许 30 秒时钟偏差容错
+        - iss (Issuer): 签发者标识，固定为 "lingshu-agent"
+        - jti (JWT ID): 令牌唯一标识符，用于支持令牌撤销（黑名单）
 
     🧠 过期时间设计：
         默认 24 小时有效期，过期后前端需引导重新登录。
-        未实现 Refresh Token 机制——对于内部工具平台，这种简化是合理的。
-        若面向公网用户，应增加短期 Access Token + 长期 Refresh Token 双令牌方案。
 
     ⚡ 性能：纯 Python 计算，单次签发 < 0.1ms，无 I/O 开销。
     """
     settings = get_settings()
+    now_ts = int(time.time())
     payload = dict(data)
-    # 过期时间戳：当前 UTC 秒数 + 配置的有效分钟数
-    payload["exp"] = int(time.time()) + settings.access_token_minutes * 60
+    payload["exp"] = now_ts + settings.access_token_minutes * 60
+    payload["nbf"] = now_ts - 30              # 允许 30 秒时钟偏差
+    payload["iss"] = "lingshu-agent"
+    payload["jti"] = uuid.uuid4().hex          # 唯一令牌 ID，用于撤销
     # JWT Header：固定为 HS256 对称签名
     header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
     # 构造 Header.Payload 的 Base64URL 编码
@@ -124,10 +133,13 @@ def decode_access_token(token: str) -> dict:
         1. 结构完整性：必须为三段式 Header.Payload.Signature 格式
         2. 签名验证：重新计算 HMAC 并恒定时间比较，防止篡改
         3. 过期检查：exp 必须大于当前时间戳
-        4. 主体检查：sub 字段必须存在，代表用户 ID
+        4. 生效检查：nbf 必须小于等于当前时间戳（允许 30 秒时钟偏差）
+        5. 签发者验证：iss 必须为 "lingshu-agent"
+        6. 主体检查：sub 字段必须存在，代表用户 ID
+        7. 撤销检查：jti 不在 Redis 黑名单中（如果 Redis 可用）
 
     Raises:
-        ValueError: 任何验证失败（格式错误、签名不匹配、过期、无效载荷）
+        ValueError: 任何验证失败
     """
     settings = get_settings()
     parts = token.split(".")
@@ -139,11 +151,22 @@ def decode_access_token(token: str) -> dict:
     if not hmac.compare_digest(_b64url_decode(s), expected):
         raise ValueError("Invalid signature")
     payload = json.loads(_b64url_decode(p))
-    # 🛡️ 过期校验：防止被截获的过期令牌重放
-    if payload.get("exp", 0) < time.time():
+    now_ts = int(time.time())
+    # 🛡️ 过期校验
+    if payload.get("exp", 0) < now_ts:
         raise ValueError("Token expired")
+    # 🛡️ 生效时间校验（nbf — Not Before）
+    if payload.get("nbf", 0) > now_ts:
+        raise ValueError("Token not yet valid")
+    # 🛡️ 签发者校验
+    if payload.get("iss") != "lingshu-agent":
+        raise ValueError("Invalid issuer")
+    # 🛡️ 主体校验
     if "sub" not in payload:
         raise ValueError("Missing subject")
+    # 🛡️ 撤销校验（如 Redis 可用）
+    if not _token_is_active(payload.get("jti", ""), payload.get("exp", 0)):
+        raise ValueError("Token revoked")
     return payload
 
 
@@ -161,3 +184,59 @@ def _b64url_decode(s: str) -> bytes:
     """
     s += "=" * (-len(s) % 4)
     return urlsafe_b64decode(s)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 令牌撤销 (Token Revocation)
+# ═══════════════════════════════════════════════════════════════
+
+
+def _token_is_active(jti: str, exp: int) -> bool:
+    """
+    检查令牌是否未被撤销。
+
+    如果 Redis 可用，查询 jti 是否在黑名单中。
+    如果 Redis 不可用，静默跳过撤销检查（降级策略）。
+    """
+    if not jti:
+        return True
+    try:
+        from core.services.rag_cache import redis_store
+        if redis_store.available and redis_store.client:
+            return not redis_store.client.exists(f"revoked:{jti}")
+    except Exception:
+        pass
+    return True
+
+
+def revoke_access_token(token: str) -> bool:
+    """
+    撤销访问令牌——将 jti 加入 Redis 黑名单。
+
+    🎯 使用场景：
+        - 用户主动登出
+        - 管理员强制下线某用户
+        - 检测到令牌滥用
+
+    黑名单 TTL 设置为令牌剩余有效期，过期后自动清理。
+
+    返回 True 表示撤销成功，False 表示 Redis 不可用（降级）。
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return False
+        payload = json.loads(_b64url_decode(parts[1]))
+        jti = payload.get("jti", "")
+        exp = payload.get("exp", 0)
+        if not jti:
+            return False
+        now_ts = int(time.time())
+        ttl = max(1, exp - now_ts)
+        from core.services.rag_cache import redis_store
+        if redis_store.available and redis_store.client:
+            redis_store.client.setex(f"revoked:{jti}", ttl, "1")
+            return True
+    except Exception:
+        pass
+    return False

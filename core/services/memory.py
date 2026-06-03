@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -91,7 +91,7 @@ def upsert_memory_profile(
         profile.facts = normalize_facts(payload["facts"])
     if "preferences" in payload:
         profile.preferences = normalize_preferences(payload["preferences"])
-    profile.updated_at = datetime.utcnow()
+    profile.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(profile)
     return profile

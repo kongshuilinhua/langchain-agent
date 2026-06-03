@@ -375,17 +375,38 @@ def get_db():
         db.close()
 
 
+import re
+
+# 🛡️ DDL 标识符白名单正则：仅允许标准 SQL 标识符字符
+_VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
+# 🛡️ DDL 类型白名单：仅允许已知安全的 SQL 类型
+_VALID_DDL_TYPES = {
+    "BOOLEAN", "INTEGER", "BIGINT", "FLOAT", "DOUBLE",
+    "VARCHAR", "TEXT", "JSON", "TIMESTAMP",
+}
+
+
 def _ensure_columns(table_name: str, columns: dict[str, str]) -> None:
     """
     内部辅助方法：确保目标表存在指定的列，如缺失则自动通过 ALTER TABLE 注入。
 
     🛡️ 防御性设计：
-        通过在添加前读取已有表结构缓存，避免重复执行 DDL 产生数据库层面的 Unique/Duplicate Column 物理异常。
+        - 通过正则白名单校验 table_name 和 column_name，防范 SQL 注入
+        - 通过 DDL 类型白名单校验类型声明
+        - 添加前读取已有表结构缓存，避免重复 DDL 产生 Duplicate Column 异常
     """
+    if not _VALID_IDENTIFIER.match(table_name):
+        raise ValueError(f"Invalid table name for DDL: {table_name}")
     existing = {column["name"] for column in inspect(engine).get_columns(table_name)}
     for column_name, ddl in columns.items():
         if column_name in existing:
             continue
+        if not _VALID_IDENTIFIER.match(column_name):
+            raise ValueError(f"Invalid column name for DDL: {column_name}")
+        # 抽取 DDL 中的类型关键字做白名单校验
+        ddl_type = ddl.split()[0].upper() if ddl else ""
+        if ddl_type not in _VALID_DDL_TYPES:
+            raise ValueError(f"Unsupported DDL type for column {column_name}: {ddl_type}")
         with engine.begin() as connection:
             connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
 

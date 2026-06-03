@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,8 +10,11 @@ def now() -> datetime:
     🎯 意图与工程大局观：
         统一获取 UTC 当前时间的辅助函数。
         用作 SQLAlchemy Column default 可调用对象参数，避免在服务启动时固定静态时间。
+
+    ⚡ Python 3.12+ 兼容性：
+        使用 datetime.now(timezone.utc) 替代已弃用的 datetime.utcnow()。
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 class User(Base):

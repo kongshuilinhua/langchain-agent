@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from core.config import get_settings
+from core.integrations.circuit_breaker import CircuitBreaker
 
 # 🎯 系统硬编码默认的 OpenAI 兼容模式 API 端点（指向阿里云百炼/通义千问兼容接口）
 DASHSCOPE_COMPATIBLE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -46,6 +47,8 @@ class OpenAICompatibleProvider:
         # 🛡️ 调试标记：记录上一次交互是否由 Mock 仿真模块接管，便于单元测试进行状态断言
         self.last_chat_mock = False
         self.last_embed_mock = False
+        # 🛡️ 三态熔断器：每个模型独立追踪健康状态（参考 Ragent 设计）
+        self._breakers: dict[str, CircuitBreaker] = {}
 
     def chat(
         self,
@@ -86,9 +89,15 @@ class OpenAICompatibleProvider:
             raise RuntimeError("Chat model API key is not configured")
         self.last_chat_mock = False
 
+        # 🛡️ 熔断器检查：模型不可用时快速失败
+        model_name = model or (runtime_config or {}).get("chat_model") or settings.openai_model
+        breaker = self._breaker_for(model_name)
+        if not breaker.allow_request():
+            raise RuntimeError(f"Model '{model_name}' is temporarily unavailable (circuit breaker open)")
+
         url = self._api_base(settings, runtime_config, purpose="chat").rstrip("/") + "/chat/completions"
         payload: dict = {
-            "model": model or (runtime_config or {}).get("chat_model") or settings.openai_model,
+            "model": model_name,
             "messages": messages,
             "temperature": temperature,
             "stream": False,
@@ -96,7 +105,12 @@ class OpenAICompatibleProvider:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        data = self._post_json(url, payload, api_key)
+        try:
+            data = self._post_json(url, payload, api_key)
+        except Exception:
+            breaker.record_failure()
+            raise
+        breaker.record_success()
         return self._parse_chat_response(data)
 
     def chat_stream(
@@ -130,9 +144,15 @@ class OpenAICompatibleProvider:
             raise RuntimeError("Chat model API key is not configured")
         self.last_chat_mock = False
 
+        # 🛡️ 熔断器检查：模型不可用时快速失败
+        model_name = model or (runtime_config or {}).get("chat_model") or settings.openai_model
+        breaker = self._breaker_for(model_name)
+        if not breaker.allow_request():
+            raise RuntimeError(f"Model '{model_name}' is temporarily unavailable (circuit breaker open)")
+
         url = self._api_base(settings, runtime_config, purpose="chat").rstrip("/") + "/chat/completions"
         payload: dict = {
-            "model": model or (runtime_config or {}).get("chat_model") or settings.openai_model,
+            "model": model_name,
             "messages": messages,
             "temperature": temperature,
             "stream": True,
@@ -141,7 +161,12 @@ class OpenAICompatibleProvider:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         # 🎯 编排流转：有工具绑定时，实际上由工作流 runtime 模块使用非流式 chat() 做决策，流式仅在最后的最终回答生成阶段触发
-        yield from self._post_json_stream(url, payload, api_key)
+        try:
+            yield from self._post_json_stream(url, payload, api_key)
+        except Exception:
+            breaker.record_failure()
+            raise
+        breaker.record_success()
 
     def embed(self, text: str, *, runtime_config: dict | None = None) -> list[float]:
         """
@@ -286,6 +311,12 @@ class OpenAICompatibleProvider:
         if settings.dashscope_api_key and (not base or base.rstrip("/") == OPENAI_COMPATIBLE_DEFAULT_BASE.rstrip("/")):
             return DASHSCOPE_COMPATIBLE_BASE
         return base or OPENAI_COMPATIBLE_DEFAULT_BASE
+
+    def _breaker_for(self, model_name: str) -> CircuitBreaker:
+        """获取指定模型的熔断器实例（惰性创建）。"""
+        if model_name not in self._breakers:
+            self._breakers[model_name] = CircuitBreaker(failure_threshold=3, timewindow=60)
+        return self._breakers[model_name]
 
     def _post_json(self, url: str, payload: dict, api_key: str, *, timeout_seconds: int = 60) -> dict:
         """

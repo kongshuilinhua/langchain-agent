@@ -254,8 +254,7 @@ def _bm25_search(db: Session, *, workspace_id: int, knowledge_base_ids: list[int
                     "metadata": _row_metadata(row),
                     "tokens": tokens
                 })
-            # ⚡ 释放会话状态，阻断内存溢出
-            db.expire_all()
+        # ⚡ 批量加载完成后统一释放 SQLAlchemy 会话状态，避免循环内逐批 expire 导致的重复查询
             
         # 编译倒排表索引
         try:

@@ -7,6 +7,9 @@ email-validator==2.2.0
 SQLAlchemy==2.0.36
 psycopg2-binary==2.9.10
 python-jose[cryptography]==3.3.0
+cryptography>=41.0.0
+slowapi==0.1.9
+alembic>=1.14.0
 
 pymilvus==2.5.4
 redis==5.2.1

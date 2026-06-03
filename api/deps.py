@@ -1,8 +1,13 @@
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header
 from sqlalchemy.orm import Session
 
 from core.db.models import User, WorkspaceMember
 from core.db.session import get_db
+from core.exceptions import (
+    ErrorCode,
+    ForbiddenException,
+    UnauthorizedException,
+)
 from core.security.auth import decode_access_token
 from core.security.permissions import can_manage
 
@@ -28,16 +33,16 @@ def get_current_user(
           确保已被管理员注销或拉黑的恶意账户在首帧就被强行切断，无法接触平台资产。
     """
     if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+        raise UnauthorizedException(ErrorCode.INVALID_TOKEN, message="Missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
     try:
         payload = decode_access_token(token)
         user_id = int(payload["sub"])
     except (ValueError, KeyError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bearer token")
+        raise UnauthorizedException(ErrorCode.INVALID_TOKEN)
     user = db.get(User, user_id)
     if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
+        raise UnauthorizedException(ErrorCode.INACTIVE_USER)
     return user
 
 
@@ -61,7 +66,7 @@ def get_current_membership(
         .first()
     )
     if not membership:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No workspace membership")
+        raise ForbiddenException(ErrorCode.PERMISSION_DENIED, message="No workspace membership")
     return membership
 
 
@@ -76,5 +81,5 @@ def require_manager(membership: WorkspaceMember = Depends(get_current_membership
         用极简、声明式的工程化 API 代码逻辑，封堵了越权提权的任何通道。
     """
     if not can_manage(membership.role):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+        raise ForbiddenException(ErrorCode.PERMISSION_DENIED, message="Admin role required")
     return membership

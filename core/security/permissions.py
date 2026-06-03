@@ -42,3 +42,16 @@ def can_manage(role: str | None) -> bool:
         True 表示具有管理权限，False 表示仅有普通用户权限
     """
     return (role or "") in _MANAGE_ROLES
+
+
+def normalize_role(role: str | None) -> str:
+    """
+    规整角色字段值，剔除首尾空白，转换为小写。
+    如果是非法角色或者为空，默认退化为 "user"。
+    """
+    if not role:
+        return "user"
+    cleaned = str(role).strip().lower()
+    if cleaned in {"owner", "admin"}:
+        return cleaned
+    return "user"

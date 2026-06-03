@@ -16,7 +16,7 @@ import string
 import uuid
 import base64
 import hashlib
-import requests
+import httpx
 import re
 
 from sqlalchemy import or_
@@ -32,6 +32,22 @@ TOOL_TYPES = {"builtin", "builtin_search", "http"}
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 AUTH_TYPES = {"none", "bearer", "header", "query"}
 # 🛡️ 安全限制：禁止工具请求云原生环境的元数据地址，防止服务器凭证泄露漏洞
+# 🛡️ 安全限制：禁止工具请求所有私有/保留网段 + 云原生元数据地址
+# 参考 RFC 1918, RFC 6598 (CGN), RFC 6890, RFC 4291 (IPv6)
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),         # RFC 1918 Private
+    ipaddress.ip_network("172.16.0.0/12"),       # RFC 1918 Private
+    ipaddress.ip_network("192.168.0.0/16"),      # RFC 1918 Private
+    ipaddress.ip_network("127.0.0.0/8"),         # Loopback
+    ipaddress.ip_network("169.254.0.0/16"),      # Link-local (AWS/Google/Azure metadata)
+    ipaddress.ip_network("100.64.0.0/10"),       # RFC 6598 Carrier-grade NAT
+    ipaddress.ip_network("0.0.0.0/8"),           # Current network
+    ipaddress.ip_network("224.0.0.0/4"),         # Multicast
+    ipaddress.ip_network("240.0.0.0/4"),         # Reserved
+    ipaddress.ip_network("::1/128"),             # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),            # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),           # IPv6 link-local
+]
 CLOUD_METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 
 import threading
@@ -791,7 +807,7 @@ def _exec_web_reader(args: dict) -> dict:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         with dns_pinned(host, validated_ip):
-            resp = requests.get(url, headers=headers, timeout=8)
+            resp = httpx.get(url, headers=headers, timeout=8)
         if resp.status_code != 200:
             return {"content": json.dumps({"error": f"Failed to fetch page. HTTP status: {resp.status_code}"}), "result_preview": f"HTTP Error: {resp.status_code}"}
         
@@ -814,7 +830,7 @@ def _exec_wikipedia(args: dict) -> dict:
         return {"content": json.dumps({"error": "Query cannot be empty"}), "result_preview": "Error: Empty Query"}
     try:
         url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(query)}"
-        resp = requests.get(url, headers={"User-Agent": "LingshuAgent/1.0"}, timeout=6)
+        resp = httpx.get(url, headers={"User-Agent": "LingshuAgent/1.0"}, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
             payload = {
@@ -837,7 +853,7 @@ def _exec_arxiv_search(args: dict) -> dict:
         return {"content": json.dumps({"error": "Query cannot be empty"}), "result_preview": "Error: Empty Query"}
     try:
         url = f"http://export.arxiv.org/api/query?search_query=all:{urllib.parse.quote(query)}&max_results={max_results}"
-        resp = requests.get(url, timeout=8)
+        resp = httpx.get(url, timeout=8)
         
         xml_text = resp.text
         entries = []
@@ -915,7 +931,7 @@ def _exec_currency_converter(args: dict) -> dict:
     amount = float(args.get("amount") or 1.0)
     
     try:
-        resp = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
+        resp = httpx.get("https://open.er-api.com/v6/latest/USD", timeout=5)
         rates = resp.json().get("rates", {}) if resp.status_code == 200 else {}
     except Exception:
         rates = {}
@@ -940,7 +956,7 @@ def _exec_ip_lookup(args: dict) -> dict:
     ip = str(args.get("ip") or "").strip()
     try:
         url = f"http://ip-api.com/json/{ip}"
-        resp = requests.get(url, timeout=5)
+        resp = httpx.get(url, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             payload = {
@@ -964,7 +980,7 @@ def _exec_url_shortener(args: dict) -> dict:
         return {"content": json.dumps({"error": "URL cannot be empty"}), "result_preview": "Error: Empty URL"}
     try:
         api_url = f"http://tinyurl.com/api-create.php?url={urllib.parse.quote(url)}"
-        resp = requests.get(api_url, timeout=5)
+        resp = httpx.get(api_url, timeout=5)
         if resp.status_code == 200:
             shortened = resp.text.strip()
             return {"content": json.dumps({"url": url, "short_url": shortened}), "result_preview": shortened}
@@ -978,7 +994,7 @@ def _exec_weather_lookup(args: dict) -> dict:
     city = str(args.get("city") or "Shanghai").strip()
     try:
         url = f"https://wttr.in/{urllib.parse.quote(city)}?format=j1"
-        resp = requests.get(url, timeout=6)
+        resp = httpx.get(url, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
             curr = data.get("current_condition", [{}])[0]
@@ -1173,12 +1189,23 @@ def _validate_safe_https_url(url: str) -> str:
 
 def _reject_ip(ip: ipaddress._BaseAddress) -> None:
     """
-    🛡️ 高精度的内网私有 IP 范围审计过滤哨兵（SSRF 终极防线）。
-    涵盖 IPv4/IPv6 环回地址、私有局域网网段（如 10.x、172.16.x、192.168.x）、
-    链路本地多播网段及云原生元数据主机范围。
+    🛡️ 高精度 SSRF 私有 IP 审计过滤哨兵。
+
+    涵盖：
+    - IPv4 环回地址、RFC 1918 私有网段、链路本地、多播、保留地址
+    - RFC 6598 运营商级 NAT (100.64.0.0/10)
+    - IPv6 环回 (::1)、唯一本地 (fc00::/7)、链路本地 (fe80::/10)
+    - 云原生元数据魔术地址 (169.254.169.254, metadata.google.internal)
+
+    双重检查策略：
+    1. Python ipaddress 标准方法（is_loopback/is_private/is_link_local/is_multicast/is_reserved）
+    2. 显式 IP 网段列表 _BLOCKED_NETWORKS（兜底未被标准方法覆盖的边界）
     """
-    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or str(ip) in CLOUD_METADATA_HOSTS:
-        raise ValueError("HTTP tool target is blocked")
+    if (ip.is_loopback or ip.is_private or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved
+            or str(ip) in CLOUD_METADATA_HOSTS
+            or any(ip in net for net in _BLOCKED_NETWORKS)):
+        raise ValueError(f"HTTP tool target is blocked: {ip}")
 
 
 def _headers(tool: Tool, input_data: dict) -> dict:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import time
 from types import SimpleNamespace
@@ -189,7 +189,7 @@ class WorkflowRunner:
                 int(runtime.settings.get("memory", {}).get("max_messages", 12)),
             )
         run.status = "succeeded"
-        run.completed_at = datetime.utcnow()
+        run.completed_at = datetime.now(timezone.utc)
         self.db.commit()
         return run, final_answer, [*context.get("sources", []), *context.get("web_sources", [])], steps
 
@@ -263,7 +263,7 @@ class WorkflowRunner:
                 int(runtime.settings.get("memory", {}).get("max_messages", 12)),
             )
         run.status = "succeeded"
-        run.completed_at = datetime.utcnow()
+        run.completed_at = datetime.now(timezone.utc)
         self.db.commit()
         yield {
             "event": "complete",
