@@ -1,4 +1,4 @@
-import React, { Component, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { Component, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -9,6 +9,8 @@ import { AgentAvatar, UserAvatar } from './components/AgentAvatar.jsx';
 import { PromptTemplateDialog } from './components/PromptTemplateDialog.jsx';
 import { KnowledgeBaseDialog } from './components/KnowledgeBaseDialog.jsx';
 import { KnowledgeDocumentList, KnowledgeUploadBox } from './components/KnowledgeDocumentList.jsx';
+import { ConfirmDialog } from './components/ConfirmDialog.jsx';
+import { ErrorBoundary } from './components/ErrorBoundary.jsx';
 
 import {
   AlertTriangle,
@@ -45,6 +47,14 @@ import {
   X,
 } from 'lucide-react';
 import './styles.css';
+// ── Phase 4: lib/ 模块（渐进迁移目标，当前与 utils.js 并存）──
+import { API_BASE, AUTH_TOKEN_KEY, ApiError, isAuthError, notifyAuthExpired, initialAuthToken, errorMessage, api } from './lib/api.js';
+import { modelLabel, reasoningCapabilityForModel, findModelForForm, thinkingStatusText, modelCapabilityWarning, attachmentAcceptForModel, attachmentHintForModel } from './lib/models.js';
+import { getRagRuntime, ragStatusText, getWebSearchRuntime, webSearchStatusText, defaultRuntimeStatus } from './lib/rag.js';
+import { roleLabel, isAdminRole, statusLabel, formatDateTime } from './lib/format.js';
+import { fileToBase64, handleAttachmentInput, handleAttachmentPaste, handleAttachmentDrop } from './lib/upload.js';
+import { normalizeMemoryProfile, profileToDraft, memoryProfilePayload } from './lib/memory.js';
+// ── 原有 utils.js 导入（逐步迁移到 lib/ 后删除）──
 import {
   API_BASE,
   MAX_UPLOAD_BYTES,
@@ -2155,38 +2165,6 @@ function AgentIdentityDialog({ error, initialForm, mode, onCancel, onSubmit, sav
     </div>
   );
 }
-
-function ConfirmDialog({ cancelLabel ='取消', confirmLabel = '删除', detail = '', message, onCancel, onConfirm, title, tone = 'danger' }) {
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onCancel();
-      if (event.key === 'Enter') onConfirm();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onCancel, onConfirm]);
-
-  return (
-    <div className="confirm-dialog-backdrop" role="presentation">
-      <section className={`confirm-dialog ${tone}`} role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" onClick={(event) => event.stopPropagation()}>
-        <header>
-          <span className="confirm-dialog-icon"><Trash2 size={18} /></span>
-          <div>
-            <h2 id="confirm-dialog-title">{title || '确认删除'}</h2>
-            <p>{message}</p>
-          </div>
-        </header>
-        {detail && <p className="confirm-dialog-detail">{detail}</p>}
-        <footer>
-          <button type="button" onClick={onCancel}>{cancelLabel}</button>
-          <button className="danger" type="button" autoFocus onClick={onConfirm}>{confirmLabel}</button>
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-
 
 
 
