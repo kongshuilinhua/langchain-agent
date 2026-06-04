@@ -45,10 +45,14 @@ def client(monkeypatch):
     import core.runtime.workflow as workflow_runtime
     import api.main as main
 
+    import api.routes.knowledge as knowledge_route
+    import api.routes.chat as chat_route
     importlib.reload(db_session)
     importlib.reload(vector_module)
     importlib.reload(knowledge_service)
     importlib.reload(workflow_runtime)
+    importlib.reload(knowledge_route)
+    importlib.reload(chat_route)
     importlib.reload(main)
     db_session.init_db()
     with TestClient(main.app) as test_client:

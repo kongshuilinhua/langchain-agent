@@ -74,7 +74,7 @@ class OpenAICompatibleProvider:
         if settings.mock_llm:
             self.last_chat_mock = True
             user_text = self._content_text(next((m["content"] for m in reversed(messages) if m.get("role") == "user"), ""))
-            context_hint = " ".join(self._content_text(m.get("content", ""))[:160] for m in messages if m.get("role") == "system")
+            context_hint = " ".join(self._content_text(m.get("content", ""))[:500] for m in messages if m.get("role") == "system")
             if tools:
                 tool_names = [t.get("function", {}).get("name", "") for t in tools]
                 return ChatResponse(
@@ -84,7 +84,7 @@ class OpenAICompatibleProvider:
                         "function": {"name": tool_names[0], "arguments": json.dumps({"query": user_text[:120]}, ensure_ascii=False)},
                     }]
                 )
-            return ChatResponse(content=f"Mock answer for: {user_text}\n\nContext summary: {context_hint[:220]}")
+            return ChatResponse(content=f"Mock answer for: {user_text}\n\nContext summary: {context_hint[:2000]}")
         if not api_key:
             raise RuntimeError("Chat model API key is not configured")
         self.last_chat_mock = False

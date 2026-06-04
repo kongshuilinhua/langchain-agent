@@ -640,10 +640,6 @@ class WorkflowRunner:
               历史会话依旧能按当时的“契约 snapshot”完美流转。
             - `mode == "draft"`：实时查询 Agent 数据库的最新字段，快速响应开发调试期的即时保存预览。
         """
-        # Auto-fallback to draft if published is requested but agent has never been published.
-        if mode == "published" and not agent.published_version_id:
-            mode = "draft"
-
         if mode not in {"draft", "published"}:
             raise ValueError("mode must be draft or published")
         if mode == "published":
