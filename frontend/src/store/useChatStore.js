@@ -20,6 +20,10 @@ export const useChatStore = create((set, get) => ({
   searchEnabled: false,
   chatVariables: {},
   chatAttachments: [],
+  uploadingAttachment: false,
+  sessionTitleDraft: '',
+  toolDebugEvents: [],
+  feedbackByMessage: {},
 
   setBusy: (busy) => set({ busy }),
   setError: (error) => set({ error }),
@@ -30,10 +34,28 @@ export const useChatStore = create((set, get) => ({
   setSearchEnabled: (searchEnabled) => set({ searchEnabled }),
   setChatMode: (chatMode) => set({ chatMode }),
   setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
-  setSessions: (sessions) => set({ sessions }),
-  setMessages: (messages) => set({ messages }),
+  setSessions: (sessions) => set((s) => ({
+    sessions: typeof sessions === 'function' ? sessions(s.sessions) : sessions
+  })),
+  setMessages: (messages) => set((s) => ({
+    messages: typeof messages === 'function' ? messages(s.messages) : messages
+  })),
   updateChatVariable: (key, value) => set((s) => ({ chatVariables: { ...s.chatVariables, [key]: value } })),
-  setChatAttachments: (chatAttachments) => set({ chatAttachments }),
+  setChatAttachments: (chatAttachments) => set((s) => ({
+    chatAttachments: typeof chatAttachments === 'function' ? chatAttachments(s.chatAttachments) : chatAttachments
+  })),
+  setSources: (sources) => set({ sources }),
+  setUploadingAttachment: (uploadingAttachment) => set({ uploadingAttachment }),
+  setSessionTitleDraft: (sessionTitleDraft) => set({ sessionTitleDraft }),
+  setToolDebugEvents: (toolDebugEvents) => set((s) => ({
+    toolDebugEvents: typeof toolDebugEvents === 'function' ? toolDebugEvents(s.toolDebugEvents) : toolDebugEvents
+  })),
+  setFeedbackByMessage: (feedbackByMessage) => set((s) => ({
+    feedbackByMessage: typeof feedbackByMessage === 'function' ? feedbackByMessage(s.feedbackByMessage) : feedbackByMessage
+  })),
+  setChatVariables: (chatVariables) => set((s) => ({
+    chatVariables: typeof chatVariables === 'function' ? chatVariables(s.chatVariables) : chatVariables
+  })),
   addMessage: (message) => set((s) => ({ messages: [...s.messages, message] })),
   updateLastMessage: (updater) => set((s) => {
     const msgs = [...s.messages];

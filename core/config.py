@@ -61,8 +61,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     # 🧠 默认聊天模型：qwen-plus 是阿里通义千问的高性价比版本，131K 上下文窗口
     openai_model: str = Field(default="qwen-plus", alias="OPENAI_MODEL")
-    # 🧠 Embedding 模型：text-embedding-v4 是灵积平台最新的高维向量模型
-    openai_embedding_model: str = Field(default="text-embedding-v4", alias="OPENAI_EMBEDDING_MODEL")
+    # 🧠 Embedding 模型：text-embedding-v3 是灵积平台最新的高维向量模型
+    openai_embedding_model: str = Field(default="text-embedding-v3", alias="OPENAI_EMBEDDING_MODEL")
     dashscope_api_key: str | None = Field(default=None, alias="DASHSCOPE_API_KEY")
     deepseek_api_base: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_API_BASE")
     deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")

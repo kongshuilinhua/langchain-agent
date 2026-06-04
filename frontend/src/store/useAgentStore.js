@@ -29,6 +29,7 @@ export const useAgentStore = create((set, get) => ({
   },
 
   setActiveAgentId: (id) => set({ activeAgentId: id }),
+  setActiveAgent: (activeAgent) => set({ activeAgent }),
   setAgents: (agents) => set({ agents }),
   setAgentForm: (updater) => set((s) => ({
     agentForm: typeof updater === 'function' ? updater(s.agentForm) : { ...s.agentForm, ...updater },

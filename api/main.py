@@ -179,8 +179,8 @@ async def health():
                 "base_url": embedding_base,
                 "mock": embedding_mock,
                 "configured": bool(embedding_model and embedding_api_key),
-                "available": bool(embedding_model and embedding_api_key and not embedding_mock),
-                "reason": None if bool(embedding_model and embedding_api_key and not embedding_mock) else _runtime_unavailable_reason(embedding_probe, vector_status),
+                "available": bool(embedding_model and embedding_api_key and not embedding_mock and embedding_probe.get("ok", False)),
+                "reason": None if bool(embedding_model and embedding_api_key and not embedding_mock and embedding_probe.get("ok", False)) else _runtime_unavailable_reason(embedding_probe, vector_status),
                 "probe": embedding_probe,
             },
             "web_search": {

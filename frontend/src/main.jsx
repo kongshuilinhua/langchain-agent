@@ -1,4 +1,4 @@
-﻿import React, { Component, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
@@ -600,6 +600,7 @@ function App() {
   const [runtimeStatus, setRuntimeStatus] = useState(() => defaultRuntimeStatus());
   const [marketAgents, setMarketAgents] = useState([]);
   const [reviewItems, setReviewItems] = useState([]);
+  const [members, setMembers] = useState([]);
   // Phase 4: Zustand chat store replaces 19 useState calls
   const {
     sessions, activeSessionId, sessionTitleDraft, messages, sources, toolDebugEvents,
@@ -613,6 +614,10 @@ function App() {
   } = useChatStore();
   const [documents, setDocuments] = useState([]);
   const [toastMsg, setToastMsg] = useState('');
+  const notify = useCallback((msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3000);
+  }, []);
   const [authMode, setAuthMode] = useState('register');
   const [authForm, setAuthForm] = useState({ email: 'admin@example.com', name: 'Admin', password: 'password123' });
   const [docForm, setDocForm] = useState({ filename: 'guide.txt', text: '这里是一段知识库资料。', kb_id: '' });
@@ -769,36 +774,36 @@ function App() {
     const { token, me, workspace } = useAuthStore.getState();
     const [health, agentList, kbList, toolList, modelList, userModelList, marketList, reviewList, promptTemplateList, memberList] = await Promise.all([
       api('/api/health').catch(() => defaultRuntimeStatus()),
-      fetchAgents(token),
-      fetchKnowledgeBases(token),
-      fetchTools(token),
-      fetchModels(false, token),
-      fetchUserModels(token).catch(() => ({ items: [] })),
-      fetchMarketAgents(token).catch(() => ({ items: [] })),
-      fetchReviews(token).catch(() => ({ items: [] })),
-      fetchPromptTemplates(false, token).catch(() => ({ items: [] })),
-      fetchMembers(token).catch(() => ({ items: [] })),
+      fetchAgents(token).catch(() => []),
+      fetchKnowledgeBases(token).catch(() => []),
+      fetchTools(token).catch(() => []),
+      fetchModels(false, token).catch(() => []),
+      fetchUserModels(token).catch(() => []),
+      fetchMarketAgents(token).catch(() => []),
+      fetchReviews(token).catch(() => []),
+      fetchPromptTemplates(false, token).catch(() => []),
+      fetchMembers(token).catch(() => []),
     ]);
-    setAgents(agentList.items);
-    setKnowledgeBases(kbList.items);
-    setTools(toolList.items);
-    setPromptTemplates(promptTemplateList.items || []);
-    setModels(modelList.items || []);
-    setAdminModels(modelList.items || []);
-    setUserModels(userModelList.items || []);
+    setAgents(agentList);
+    setKnowledgeBases(kbList);
+    setTools(toolList);
+    setPromptTemplates(promptTemplateList);
+    setModels(modelList);
+    setAdminModels(modelList);
+    setUserModels(userModelList);
     setRuntimeStatus(health);
-    if (isAdminRole(ws.workspace?.role)) {
-      const adminModelList = await api('/api/models?include_disabled=true', { token }).catch(() => modelList);
-      setAdminModels(adminModelList.items || []);
+    if (isAdminRole(workspace?.role)) {
+      const adminModelList = await fetchModels(true, token).catch(() => modelList);
+      setAdminModels(adminModelList);
     }
-    setMarketAgents(marketList.items || []);
-    setReviewItems(reviewList.items || []);
-    setMembers(memberList.items || []);
-    const publishedAgents = agentList.items.filter((item) => item.status === 'published' && item.published_version_id);
-    const fallbackAgent = publishedAgents[0] || agentList.items[0];
+    setMarketAgents(marketList);
+    setReviewItems(reviewList);
+    setMembers(memberList);
+    const publishedAgents = agentList.filter((item) => item.status === 'published' && item.published_version_id);
+    const fallbackAgent = publishedAgents[0] || agentList[0];
     if (!activeAgentId && fallbackAgent) {
       setActiveAgentId(fallbackAgent.id);
-    } else if (activeAgentId && !agentList.items.some((item) => item.id === activeAgentId) && fallbackAgent) {
+    } else if (activeAgentId && !agentList.some((item) => item.id === activeAgentId) && fallbackAgent) {
       setActiveAgentId(fallbackAgent.id);
     }
   }
@@ -847,13 +852,17 @@ function App() {
   async function authenticate(event) {
     event.preventDefault();
     setError('');
-    const path = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-    const payload = authMode === 'register'
-      ? { email: authForm.email, name: authForm.name, password: authForm.password }
-      : { email: authForm.email, password: authForm.password };
-    const data = await api(path, { method: 'POST', body: payload });
-    localStorage.setItem(AUTH_TOKEN_KEY, data.access_token);
-    useAuthStore.getState().setToken(data.access_token);
+    try {
+      const path = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      const payload = authMode === 'register'
+        ? { email: authForm.email, name: authForm.name, password: authForm.password }
+        : { email: authForm.email, password: authForm.password };
+      const data = await api(path, { method: 'POST', body: payload });
+      localStorage.setItem(AUTH_TOKEN_KEY, data.access_token);
+      useAuthStore.getState().setToken(data.access_token);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
 
   async function loadAgent(agentId) {
