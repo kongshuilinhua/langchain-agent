@@ -18,6 +18,7 @@ frontend/.env.local
 .idea/
 .vs/
 .vscode/
+.claude/
 
 # 日志与运行产物
 logs/
