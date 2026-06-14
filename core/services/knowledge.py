@@ -8,10 +8,10 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
-from core.db.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
+from core.db.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument, KnowledgeParentChunk
 from core.integrations.llm import OpenAICompatibleProvider
 from core.integrations import vector_store as vector_store_module
-from core.services.rag import retrieve, _tokenize
+from core.services.rag import retrieve
 from core.services.uploads import DOC_TYPES, extract_document_text, sanitize_extracted_text
 
 
@@ -201,83 +201,51 @@ def index_document(
             filters={"workspace_id": workspace_id, "knowledge_base_id": kb.id, "document_id": document.id}
         )
         db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).delete(synchronize_session=False)
+        db.query(KnowledgeParentChunk).filter(KnowledgeParentChunk.document_id == document.id).delete(synchronize_session=False)
 
     document.status = "indexing"
     document.error_message = ""
     document.chunk_count = 0
-    
-    # 读取保存在文档中的分段配置规则
-    cfg = document.segment_config or {}
-    seg_mode = cfg.get("segment_mode", "auto")
-    
-    if seg_mode == "hierarchy":
-        chunks = split_by_hierarchy(
-            document.text,
-            kb_id=kb.id,
-            document_id=document.id,
-            max_level=cfg.get("hierarchy_level", 3),
-            keep_hierarchy_info=cfg.get("keep_hierarchy_info", True)
-        )
-    elif seg_mode == "custom":
-        # 根据自定义参数运行 parent-child 分割
-        chunks = split_parent_child(
-            document.text,
-            kb_id=kb.id,
-            document_id=document.id,
-            parent_size=cfg.get("max_chunk_len", 1600),
-            child_size=int(cfg.get("max_chunk_len", 1600) * 0.35), # 等比例 child
-            overlap=int(cfg.get("max_chunk_len", 1600) * cfg.get("overlap_pct", 10) / 100)
-        )
-    else:
-        # 自动分段默认采用原系统的 split_parent_child 机制
-        chunks = split_parent_child(document.text, kb_id=kb.id, document_id=document.id)
-        
-    provider = OpenAICompatibleProvider()
+
+    # 惰性导入避免与 ingestion 包的循环依赖（knowledge 在模块层不依赖 ingestion）
+    from core.services.ingestion.context import IngestionContext
+    from core.services.ingestion.nodes import ChunkNode, EmbedNode, StoreNode
+    from core.services.ingestion.pipeline import IngestionPipeline, IngestionPipelineError
+
     settings = get_settings()
-    for index, chunk_data in enumerate(chunks):
-        chunk_text = chunk_data["text"]
-        vector_id = chunk_data["chunk_id"]
-        vector = provider.embed(chunk_text, runtime_config=runtime_config)
-        metadata = {
-            "workspace_id": workspace_id,
-            "knowledge_base_id": kb.id,
-            "document_id": document.id,
-            "chunk_id": vector_id,
-            "parent_id": chunk_data["parent_id"],
-            "filename": document.filename,
-            "title": document.title or document.filename,
-            "page": chunk_data.get("page"),
-            "section": chunk_data.get("section") or "",
-            "content_hash": chunk_data["content_hash"],
-            "tokens": _tokenize(chunk_text),
-        }
-        chunk = KnowledgeChunk(
-            workspace_id=workspace_id,
-            knowledge_base_id=kb.id,
-            document_id=document.id,
-            chunk_index=index,
-            text=chunk_text,
-            vector_id=vector_id,
-            parent_id=chunk_data["parent_id"],
-            chunk_id=vector_id,
+    ctx = IngestionContext(
+        workspace_id=workspace_id,
+        knowledge_base_id=kb.id,
+        document_id=document.id,
+        filename=document.filename,
+        content_type=document.content_type,
+        text=document.text,
+        segment_config=document.segment_config or {},
+        runtime_config=runtime_config,
+    )
+    pipeline = IngestionPipeline([
+        ChunkNode(),
+        EmbedNode(OpenAICompatibleProvider()),
+        StoreNode(
+            db,
+            vector_store_module.vector_store,
             title=document.title or document.filename,
-            page=chunk_data.get("page"),
-            section=chunk_data.get("section") or "",
-            content_hash=chunk_data["content_hash"],
+            filename=document.filename,
             embedding_model=settings.openai_embedding_model,
-            embedding_dimension=len(vector),
-            metadata_=metadata,
-        )
-        db.add(chunk)
-        vector_store_module.vector_store.upsert(
-            vector_id,
-            vector,
-            chunk_text,
-            metadata,
-        )
-    document.chunk_count = len(chunks)
+        ),
+    ])
+    try:
+        pipeline.run(ctx)
+    except IngestionPipelineError as exc:
+        document.ingestion_log = ctx.logs
+        document.status = "failed"
+        document.error_message = _sanitize_error(str(exc))
+        document.chunk_count = 0
+        raise
+    document.ingestion_log = ctx.logs
+    document.chunk_count = len(ctx.children)
     document.status = "indexed"
-    return len(chunks)
+    return len(ctx.children)
 
 
 def delete_document(db: Session, *, workspace_id: int, document: KnowledgeDocument) -> None:
@@ -285,6 +253,7 @@ def delete_document(db: Session, *, workspace_id: int, document: KnowledgeDocume
     vector_store_module.vector_store.delete(filters={"workspace_id": workspace_id, "knowledge_base_id": document.knowledge_base_id, "document_id": document.id})
     for chunk in chunks:
         db.delete(chunk)
+    db.query(KnowledgeParentChunk).filter(KnowledgeParentChunk.document_id == document.id).delete(synchronize_session=False)
     db.delete(document)
     db.commit()
 
@@ -294,6 +263,7 @@ def delete_knowledge_base(db: Session, *, workspace_id: int, kb: KnowledgeBase) 
     for document in documents:
         vector_store_module.vector_store.delete(filters={"workspace_id": workspace_id, "knowledge_base_id": kb.id, "document_id": document.id})
         db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).delete(synchronize_session=False)
+    db.query(KnowledgeParentChunk).filter(KnowledgeParentChunk.knowledge_base_id == kb.id).delete(synchronize_session=False)
     db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id).delete(synchronize_session=False)
     db.delete(kb)
     db.commit()

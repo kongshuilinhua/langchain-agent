@@ -87,3 +87,32 @@ def test_preview_and_resegment_integration(client, auth_headers):
     chunks_res = chunks_response.json()
     assert chunks_res["document"]["chunk_count"] == 3
     assert len(chunks_res["chunks"]) == 3
+
+
+def test_ingestion_stores_parents_and_log(client, auth_headers):
+    # 入库管线：父块落库 + 每节点 ingestion_log
+    kb = client.post("/api/knowledge-bases", headers=auth_headers, json={"name": "Ingestion Pipeline KB"})
+    assert kb.status_code == 200
+    kb_id = kb.json()["knowledge_base"]["id"]
+
+    doc = client.post(
+        f"/api/knowledge-bases/{kb_id}/documents",
+        headers=auth_headers,
+        json={"title": "long.txt", "content": "段落内容。" * 400, "source_type": "text"},
+    )
+    assert doc.status_code == 200, doc.text
+    document_id = doc.json()["document"]["id"]
+
+    import core.db.session as db_session
+    from core.db.models import KnowledgeDocument, KnowledgeParentChunk
+
+    with db_session.SessionLocal() as session:
+        parents = (
+            session.query(KnowledgeParentChunk)
+            .filter(KnowledgeParentChunk.document_id == document_id)
+            .all()
+        )
+        assert parents, "父块应已落库"
+        document = session.get(KnowledgeDocument, document_id)
+        assert document.ingestion_log, "ingestion_log 应已写入"
+        assert any(entry["node"] == "store" for entry in document.ingestion_log)

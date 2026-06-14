@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from core.services.ingestion.pipeline import IngestionNode
-from core.services.knowledge import _tokenize, chunk_document
+from core.services.knowledge import chunk_document
+from core.services.rag import _tokenize
 
 
 class ChunkNode(IngestionNode):
