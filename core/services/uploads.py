@@ -31,7 +31,7 @@ def create_upload(db: Session, *, workspace_id: int, user_id: int, filename: str
     🛡️ 防御性编程与大模型兜底：
         - 限制文件尺寸（settings.upload_max_bytes），防止大体积文件攻击引起服务端 OOM。
         - 限制只有 image 和 document 两类资源准入，其余归于 unknown 抛出，从源头封堵未知漏洞。
-        - 对文档提取出的纯文本进行严格的 `\x00` 空字符过滤，规避 PostgreSQL 在保存时的 Null-byte 物理截断报错。
+        - 对文档提取出的纯文本进行严格的 `\x00` 空字符过滤，规避数据库在保存时的 Null-byte 物理截断报错。
         - 对提取结果进行硬性长度限制 `[:20000]`，防止由于单个超长 PDF 塞爆大模型上下文窗口或在 Embedding 阶段产生超长 Token 费用。
     """
     settings = get_settings()
@@ -118,7 +118,7 @@ def extract_document_text(filename: str, content_type: str, raw: bytes) -> str:
     """
     suffix = Path(filename).suffix.lower()
     if content_type in TEXT_TYPES or suffix in {".txt", ".md", ".markdown", ".csv"}:
-        return raw.decode("utf-8", errors="replace")
+        return decode_bytes(raw)
     if content_type == "application/pdf" or suffix == ".pdf":
         return _extract_pdf_text(raw)
     if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or suffix == ".docx":
@@ -131,6 +131,31 @@ def sanitize_extracted_text(text: str) -> str:
     清洗过滤提取后的文本，剔除 Null 字节 `\x00`，保证数据库及下游大模型在序列化/传输时安全稳定。
     """
     return str(text or "").replace("\x00", "")
+
+
+def decode_bytes(raw: bytes) -> str:
+    """字节解码：utf-8 严格 → gbk 严格(中文 Windows 常见) → charset_normalizer 探测 → utf-8 replace 兜底。
+
+    🧠 为什么显式试 gbk：charset_normalizer 对短中文文本(几个字)探测不稳，而本项目大量面对
+    中文 Windows 的 GBK/GB2312 文本，故在概率探测前先尝试严格 gbk（非法字节会抛错，不会误吞）。
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return raw.decode("gbk")
+    except UnicodeDecodeError:
+        pass
+    try:
+        from charset_normalizer import from_bytes
+
+        best = from_bytes(raw).best()
+        if best is not None:
+            return str(best)
+    except Exception:
+        pass
+    return raw.decode("utf-8", errors="replace")
 
 
 def _decode_base64(content_base64: str) -> bytes:
