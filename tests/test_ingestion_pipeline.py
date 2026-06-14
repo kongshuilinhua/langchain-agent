@@ -1,5 +1,6 @@
 from core.integrations.llm import OpenAICompatibleProvider
 from core.services.ingestion.context import IngestionContext
+from core.services.ingestion.nodes import ChunkNode, EmbedNode
 from core.services.ingestion.pipeline import IngestionNode, IngestionPipeline, IngestionPipelineError
 from core.services.knowledge import chunk_csv, chunk_document
 from core.services.uploads import decode_bytes
@@ -129,3 +130,26 @@ def test_parent_chunk_model_and_log_column_exist():
     for name in ["workspace_id", "knowledge_base_id", "document_id", "parent_id", "text", "content_hash"]:
         assert name in cols
     assert "ingestion_log" in KnowledgeDocument.__table__.columns.keys()
+
+
+def test_chunk_node_fills_children_and_parents():
+    ctx = IngestionContext(
+        workspace_id=1, knowledge_base_id=1, document_id=9,
+        filename="d.txt", content_type="text/plain", text="内容。" * 400,
+    )
+    ChunkNode().run(ctx)
+    assert ctx.children and ctx.parents
+
+
+def test_embed_node_aligns_embeddings(monkeypatch):
+    monkeypatch.setenv("LINGSHU_MOCK_LLM", "true")
+    import core.config
+
+    core.config.get_settings.cache_clear()
+    ctx = IngestionContext(
+        workspace_id=1, knowledge_base_id=1, document_id=9,
+        filename="d.txt", content_type="text/plain", text="x",
+    )
+    ctx.children = [{"text": "a"}, {"text": "b"}]
+    EmbedNode(OpenAICompatibleProvider()).run(ctx)
+    assert len(ctx.embeddings) == 2
