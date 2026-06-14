@@ -1,4 +1,5 @@
 from core.integrations.llm import OpenAICompatibleProvider
+from core.services.knowledge import chunk_csv
 from core.services.uploads import decode_bytes
 
 
@@ -31,3 +32,18 @@ def test_embed_batch_mock_counts_and_matches(monkeypatch):
 def test_embed_batch_empty():
     provider = OpenAICompatibleProvider()
     assert provider.embed_batch([]) == []
+
+
+def test_chunk_csv_header_in_every_child():
+    text = "name,price\n甲,10\n乙,20\n丙,30"
+    children, parents = chunk_csv(text, kb_id=1, document_id=1, rows_per_child=2, rows_per_parent=4)
+    assert children
+    assert parents
+    for child in children:
+        assert "name" in child["text"] and "price" in child["text"]
+    joined = " ".join(c["text"] for c in children)
+    assert "甲" in joined and "丙" in joined
+
+
+def test_chunk_csv_empty():
+    assert chunk_csv("", kb_id=1, document_id=1) == ([], [])

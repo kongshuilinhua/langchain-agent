@@ -352,6 +352,56 @@ def split_text(text: str, *, chunk_size: int = 700) -> list[str]:
     return [cleaned[index : index + chunk_size] for index in range(0, len(cleaned), chunk_size)]
 
 
+def chunk_csv(
+    text: str,
+    *,
+    kb_id: int,
+    document_id: int,
+    rows_per_child: int = 5,
+    rows_per_parent: int = 20,
+) -> tuple[list[dict], list[dict]]:
+    """CSV 结构化分段：每个 child = 表头 + 若干数据行（自带表头，语义自洽）。返回 (children, parents)。"""
+    import csv
+    import io
+
+    children: list[dict] = []
+    parents: list[dict] = []
+    rows = [row for row in csv.reader(io.StringIO(text)) if any((cell or "").strip() for cell in row)]
+    if not rows:
+        return children, parents
+    header_line = ", ".join((cell or "").strip() for cell in rows[0])
+    data_rows = rows[1:] or [rows[0]]  # 仅表头时把表头当作唯一数据行
+
+    def _rows_text(group: list[list[str]]) -> str:
+        body = "\n".join(", ".join((cell or "").strip() for cell in row) for row in group)
+        return f"{header_line}\n{body}"
+
+    parent_index = 0
+    for p_start in range(0, len(data_rows), rows_per_parent):
+        p_rows = data_rows[p_start : p_start + rows_per_parent]
+        parent_id = f"kb{kb_id}-doc{document_id}-csv-parent{parent_index}"
+        parent_text = _rows_text(p_rows)
+        parents.append({
+            "parent_id": parent_id,
+            "text": parent_text,
+            "content_hash": hashlib.sha256(parent_text.encode("utf-8")).hexdigest(),
+        })
+        child_index = 0
+        for c_start in range(0, len(p_rows), rows_per_child):
+            child_text = _rows_text(p_rows[c_start : c_start + rows_per_child])
+            children.append({
+                "parent_id": parent_id,
+                "chunk_id": f"{parent_id}-child{child_index}",
+                "text": child_text,
+                "page": None,
+                "section": "",
+                "content_hash": hashlib.sha256(child_text.encode("utf-8")).hexdigest(),
+            })
+            child_index += 1
+        parent_index += 1
+    return children, parents
+
+
 def split_parent_child(
     text: str,
     *,
