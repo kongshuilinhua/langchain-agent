@@ -21,7 +21,8 @@ from core.db.models import (
     Upload,
 )
 from core.integrations.llm import OpenAICompatibleProvider
-from core.services.agents import get_agent_detail, normalize_memory, normalize_rag, normalize_tool_policy
+from core.services.agents import get_agent_detail, normalize_memory, normalize_rag, normalize_tool_policy, normalize_query_understanding
+from core.services import query_understanding as qu_service
 from core.services.rag import retrieve
 from core.services.memory import format_profile_memory, get_memory_profile, memory_used_event
 from core.services.models import resolve_agent_model
@@ -142,8 +143,9 @@ class WorkflowRunner:
             "web_sources": search_status.get("sources", []),
             "uploads": uploads,
         }
+        self._understand_query(runtime, context)
         steps: list[dict] = []
-        
+
         # 串行调度执行每个图节点元数据
         for node in runtime.workflow:
             output = self._execute_node(runtime, node, context)
@@ -152,6 +154,7 @@ class WorkflowRunner:
                 output.setdefault("events", []).append({"event": "memory_used", "data": profile_memory_event})
                 output.setdefault("events", []).append({"event": "thinking_status", "data": thinking_status})
                 output.setdefault("events", []).append({"event": "search_status", "data": self._search_status_event(search_status)})
+                output.setdefault("events", []).append({"event": "query_understanding", "data": context.get("query_understanding_event", {})})
             events = output.pop("events", [])
             context.update(output)
             step = RunStep(
@@ -238,6 +241,7 @@ class WorkflowRunner:
                 output.setdefault("events", []).append({"event": "memory_used", "data": context.get("profile_memory_used", {})})
                 output.setdefault("events", []).append({"event": "thinking_status", "data": context.get("thinking_status", {})})
                 output.setdefault("events", []).append({"event": "search_status", "data": self._search_status_event(context.get("search_status", {}))})
+                output.setdefault("events", []).append({"event": "query_understanding", "data": context.get("query_understanding_event", {})})
             events = output.pop("events", [])
             context.update(output)
             step = self._persist_step(run, node, user_message, output)
@@ -334,6 +338,7 @@ class WorkflowRunner:
             "web_sources": search_status.get("sources", []),
             "uploads": uploads,
         }
+        self._understand_query(runtime, context)
         return runtime, run, context
 
     def _persist_step(self, run: Run, node: dict, user_message: str, output: dict) -> RunStep:
@@ -394,20 +399,35 @@ class WorkflowRunner:
                     "no_evidence": False,
                 }
                 return {"sources": [], "rag_enabled": False, "rag_status": status, "events": [{"event": "rag_status", "data": status}]}
-            
+
+            route = context.get("route", "knowledge")
+            if route != "knowledge":
+                status = {
+                    "enabled": True, "effective_source": effective_source,
+                    "knowledge_base_ids": [], "query": context["input"],
+                    "top_k": int(context.get("rag_top_k") or node.get("config", {}).get("top_k", 4)),
+                    "matched_chunks": 0, "sources_emitted": False,
+                    "reason": f"skipped_by_route:{route}",
+                    "dense": {"matched": 0}, "bm25": {"matched": 0}, "rrf": {"matched": 0},
+                    "rerank": {"enabled": False, "applied": False, "model": None, "error": None},
+                    "cache": {"enabled": False, "hit": False, "backend": "none"},
+                    "no_evidence": False,
+                }
+                return {"sources": [], "rag_status": status, "events": [{"event": "rag_status", "data": status}]}
+
             kb_ids = getattr(agent, "knowledge_base_ids", None)
             if kb_ids is None:
                 kb_ids = [
                     row.knowledge_base_id
                     for row in self.db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.agent_id == agent.id).all()
                 ]
-            
+
             # 执行 RAG 向量混合检索与重排重估
             rag_result = retrieve(
                 self.db,
                 workspace_id=agent.workspace_id,
                 knowledge_base_ids=kb_ids,
-                query=context["input"],
+                query=context.get("rewritten_query") or context["input"],
                 config=context.get("rag_config") or {},
                 runtime_config=getattr(agent, "runtime_config", None),
             )
@@ -419,6 +439,8 @@ class WorkflowRunner:
         # 3. Tool 节点：极硬核 ReAct 自适应工具决策迭代循环 (The Core Brain of Agent)
         # ==========================================
         if node_type == "Tool":
+            if context.get("route") in ("chitchat", "clarify"):
+                return {"tool_outputs": [], "tool_stats": {"total_calls": 0, "tools_used": []}}
             bound_tools = self._runtime_tools(agent, node)
             tool_policy = (agent.settings.get("tool_policy") or {})
             allowed_names = set(tool_policy.get("allowed_tool_names") or [])
@@ -592,8 +614,14 @@ class WorkflowRunner:
             except Exception:
                 formatted_summary = raw_summary
                 
+        rewritten = context.get("rewritten_query")
+        rewrite_hint = (
+            f"解析后的检索意图（供参考，回答仍针对用户原话）：{rewritten}"
+            if rewritten and rewritten != context.get("input") else ""
+        )
         system_parts = [
             agent.system_prompt or "你是一个自定义智能体。",
+            rewrite_hint,
             *thinking_blocks,
             f"Web search results for this turn:\n{web_source_text or 'None'}",
             f"可用知识片段：\n{source_text or '无'}",
@@ -662,6 +690,7 @@ class WorkflowRunner:
                 "rag": normalize_rag(snapshot.get("rag")),
                 "tool_policy": normalize_tool_policy(snapshot.get("tool_policy")),
                 "user_model_config_id": snapshot.get("user_model_config_id", agent.user_model_config_id),
+                "query_understanding": normalize_query_understanding(snapshot.get("query_understanding")),
             }
         else:
             detail = get_agent_detail(self.db, agent)
@@ -678,6 +707,7 @@ class WorkflowRunner:
                 "rag": normalize_rag(detail.get("rag")),
                 "tool_policy": normalize_tool_policy(detail.get("tool_policy")),
                 "user_model_config_id": agent.user_model_config_id,
+                "query_understanding": normalize_query_understanding(detail.get("query_understanding")),
             }
 
         user_model_config = self._user_model_config(user_id, source["user_model_config_id"])
@@ -702,6 +732,7 @@ class WorkflowRunner:
                 "memory": source["memory"],
                 "rag": source["rag"],
                 "tool_policy": source["tool_policy"],
+                "query_understanding": source["query_understanding"],
             },
         )
 
@@ -891,6 +922,37 @@ class WorkflowRunner:
             if key not in merged:
                 merged[key] = value
         return merged
+
+    def _understand_query(self, runtime, context: dict) -> None:
+        """查询理解前置阶段：写入 rewritten_query / intent / route / clarification / 事件载荷。"""
+        config = runtime.settings.get("query_understanding") or {}
+        history = self._history_turns(context.get("memory_summary") or "")
+        result = qu_service.analyze(
+            self.provider,
+            user_message=context["input"],
+            history=history,
+            config=config,
+            runtime_config=getattr(runtime, "runtime_config", None),
+        )
+        context["rewritten_query"] = result.rewritten_query
+        context["intent"] = result.intent
+        context["confidence"] = result.confidence
+        context["route"] = result.route
+        context["query_understanding_event"] = result.event_payload()
+        if result.route == qu_service.ROUTE_CLARIFY and result.clarification:
+            # 短路：预置 draft，让 LLM/Answer 节点直接输出澄清反问
+            context["draft"] = result.clarification
+
+    @staticmethod
+    def _history_turns(memory_summary: str) -> list[dict]:
+        """把 session memory 的 JSON 轮次解析成 [{user, assistant}]，失败则空。"""
+        if not memory_summary.strip():
+            return []
+        try:
+            turns = json.loads(memory_summary)
+            return turns if isinstance(turns, list) else []
+        except Exception:
+            return []
 
     def _session_memory(self, session_id: int) -> SessionMemory | None:
         return self.db.query(SessionMemory).filter(SessionMemory.session_id == session_id).first()

@@ -153,3 +153,12 @@ def test_analyze_uses_configured_model():
     cfg = {**_ENABLED, "model": "qwen-turbo"}
     analyze(provider, user_message="q", history=[], config=cfg)
     assert provider.calls[0]["model"] == "qwen-turbo"
+
+
+def test_route_gates_retrieval_helper():
+    # 该断言锁定 Knowledge 节点门控契约：仅 route==knowledge 才检索
+    def should_retrieve(rag_enabled: bool, route: str) -> bool:
+        return rag_enabled and route == ROUTE_KNOWLEDGE
+    assert should_retrieve(True, ROUTE_KNOWLEDGE) is True
+    assert should_retrieve(True, ROUTE_CHITCHAT) is False
+    assert should_retrieve(False, ROUTE_KNOWLEDGE) is False
