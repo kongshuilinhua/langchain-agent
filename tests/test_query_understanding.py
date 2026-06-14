@@ -71,3 +71,89 @@ def test_parse_json_in_code_fence():
 def test_parse_garbage_returns_none():
     assert _parse_understanding("这不是 JSON") is None
     assert _parse_understanding("") is None
+
+
+from core.integrations.llm import ChatResponse
+from core.services.query_understanding import analyze, QueryUnderstanding
+
+
+class _FakeProvider:
+    def __init__(self, content=None, raise_exc=False):
+        self._content = content
+        self._raise = raise_exc
+        self.calls = []
+
+    def chat(self, messages, *, model=None, temperature=0.4, runtime_config=None, tools=None):
+        self.calls.append({"messages": messages, "model": model})
+        if self._raise:
+            raise RuntimeError("model down")
+        return ChatResponse(content=self._content)
+
+
+_ENABLED = {"enabled": True, "model": None, "confidence_threshold": 0.5,
+            "clarify_enabled": True, "history_turns": 4}
+
+
+def test_analyze_disabled_passthrough_no_llm_call():
+    provider = _FakeProvider(content="should not be used")
+    cfg = {**_ENABLED, "enabled": False}
+    result = analyze(provider, user_message="你好", history=[], config=cfg)
+    assert isinstance(result, QueryUnderstanding)
+    assert result.applied is False
+    assert result.route == "knowledge"
+    assert result.rewritten_query == "你好"
+    assert provider.calls == []
+
+
+def test_analyze_knowledge_intent():
+    provider = _FakeProvider(
+        content='{"rewritten_query": "产品X保修期", "intent": "knowledge", "confidence": 0.92}'
+    )
+    result = analyze(provider, user_message="保修多久", history=[], config=_ENABLED)
+    assert result.applied is True
+    assert result.intent == "knowledge"
+    assert result.route == "knowledge"
+    assert result.rewritten_query == "产品X保修期"
+
+
+def test_analyze_chitchat_skips_retrieval():
+    provider = _FakeProvider(
+        content='{"rewritten_query": "你好", "intent": "chitchat", "confidence": 0.95}'
+    )
+    result = analyze(provider, user_message="你好啊", history=[], config=_ENABLED)
+    assert result.route == "chitchat"
+
+
+def test_analyze_low_confidence_clarifies():
+    provider = _FakeProvider(
+        content='{"rewritten_query": "它", "intent": "knowledge", "confidence": 0.2}'
+    )
+    result = analyze(provider, user_message="它呢", history=[], config=_ENABLED)
+    assert result.route == "clarify"
+    assert result.clarification
+
+
+def test_analyze_degrades_on_exception():
+    provider = _FakeProvider(raise_exc=True)
+    result = analyze(provider, user_message="原始问题", history=[], config=_ENABLED)
+    assert result.applied is False
+    assert result.reason == "error"
+    assert result.route == "knowledge"
+    assert result.rewritten_query == "原始问题"
+
+
+def test_analyze_degrades_on_bad_json():
+    provider = _FakeProvider(content="模型今天不想输出 JSON")
+    result = analyze(provider, user_message="原始问题", history=[], config=_ENABLED)
+    assert result.applied is False
+    assert result.reason == "error"
+    assert result.rewritten_query == "原始问题"
+
+
+def test_analyze_uses_configured_model():
+    provider = _FakeProvider(
+        content='{"rewritten_query": "q", "intent": "knowledge", "confidence": 0.9}'
+    )
+    cfg = {**_ENABLED, "model": "qwen-turbo"}
+    analyze(provider, user_message="q", history=[], config=cfg)
+    assert provider.calls[0]["model"] == "qwen-turbo"
