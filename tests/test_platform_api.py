@@ -2636,3 +2636,18 @@ def test_published_chat_uses_snapshot_knowledge_bindings_after_draft_changes(cli
     assert published.status_code == 200
     assert "published-source-token" in published.text
     assert "draft-source-token" not in published.text
+
+
+def test_agent_detail_includes_query_understanding(client, auth_headers):
+    created = client.post(
+        "/api/agents",
+        headers=auth_headers,
+        json={"name": "QU Agent", "model": "qwen-plus"},
+    )
+    assert created.status_code == 200
+    agent_id = created.json()["agent"]["id"]
+    detail = client.get(f"/api/agents/{agent_id}", headers=auth_headers)
+    assert detail.status_code == 200
+    qu = detail.json()["agent"]["query_understanding"]
+    assert qu["enabled"] is True
+    assert qu["confidence_threshold"] == 0.5

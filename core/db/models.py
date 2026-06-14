@@ -206,6 +206,7 @@ class AgentSettings(Base):
     memory: Mapped[dict] = mapped_column(JSON, default=dict)
     rag: Mapped[dict] = mapped_column(JSON, default=dict)
     tool_policy: Mapped[dict] = mapped_column(JSON, default=dict)
+    query_understanding: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
 

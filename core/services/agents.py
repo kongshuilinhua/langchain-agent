@@ -132,6 +132,7 @@ def get_agent_detail(db: Session, agent: Agent) -> dict:
         "memory": normalize_memory(settings.memory),
         "rag": normalize_rag(settings.rag),
         "tool_policy": normalize_tool_policy(settings.tool_policy),
+        "query_understanding": normalize_query_understanding(settings.query_understanding),
     }
 
 
@@ -163,6 +164,7 @@ def create_agent(db: Session, *, workspace_id: int, user_id: int, payload: dict)
             memory=normalize_memory(payload.get("memory")),
             rag=normalize_rag(payload.get("rag")),
             tool_policy=normalize_tool_policy(payload.get("tool_policy")),
+            query_understanding=normalize_query_understanding(payload.get("query_understanding")),
         )
     )
     _replace_agent_knowledge(db, agent.id, payload.get("knowledge_base_ids") or [])
@@ -186,7 +188,7 @@ def update_agent(db: Session, agent: Agent, payload: dict) -> Agent:
         _replace_agent_knowledge(db, agent.id, payload["knowledge_base_ids"] or [])
     if "tool_ids" in payload:
         _replace_agent_tools(db, agent.id, payload["tool_ids"] or [])
-    if any(key in payload for key in ["suggested_questions", "variables", "memory", "rag", "tool_policy"]):
+    if any(key in payload for key in ["suggested_questions", "variables", "memory", "rag", "tool_policy", "query_understanding"]):
         settings = ensure_agent_settings(db, agent.id)
         if "suggested_questions" in payload:
             settings.suggested_questions = normalize_questions(payload["suggested_questions"])
@@ -198,6 +200,8 @@ def update_agent(db: Session, agent: Agent, payload: dict) -> Agent:
             settings.rag = normalize_rag(payload["rag"])
         if "tool_policy" in payload:
             settings.tool_policy = normalize_tool_policy(payload["tool_policy"])
+        if "query_understanding" in payload:
+            settings.query_understanding = normalize_query_understanding(payload["query_understanding"])
     db.commit()
     db.refresh(agent)
     return agent
@@ -386,6 +390,7 @@ def copy_agent_from_market(db: Session, *, source: Agent, user_id: int, workspac
             "memory": snapshot.get("memory") or DEFAULT_MEMORY,
             "rag": snapshot.get("rag") or DEFAULT_RAG,
             "tool_policy": snapshot.get("tool_policy") or DEFAULT_TOOL_POLICY,
+            "query_understanding": snapshot.get("query_understanding") or DEFAULT_QUERY_UNDERSTANDING,
         },
     )
     workflow = db.query(WorkflowDefinition).filter(WorkflowDefinition.agent_id == copied.id).first()
@@ -423,6 +428,7 @@ def ensure_agent_settings(db: Session, agent_id: int) -> AgentSettings:
         memory=DEFAULT_MEMORY,
         rag=DEFAULT_RAG,
         tool_policy=DEFAULT_TOOL_POLICY,
+        query_understanding=DEFAULT_QUERY_UNDERSTANDING,
     )
     db.add(settings)
     db.flush()
