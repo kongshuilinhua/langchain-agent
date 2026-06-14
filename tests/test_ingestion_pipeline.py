@@ -1,3 +1,4 @@
+from core.integrations.llm import OpenAICompatibleProvider
 from core.services.uploads import decode_bytes
 
 
@@ -13,3 +14,20 @@ def test_decode_bytes_gbk():
 def test_decode_bytes_garbage_does_not_raise():
     result = decode_bytes(b"\xff\xfe\x00bad")
     assert isinstance(result, str)
+
+
+def test_embed_batch_mock_counts_and_matches(monkeypatch):
+    monkeypatch.setenv("LINGSHU_MOCK_LLM", "true")
+    import core.config
+
+    core.config.get_settings.cache_clear()
+    provider = OpenAICompatibleProvider()
+    vectors = provider.embed_batch(["甲", "乙", "丙"])
+    assert len(vectors) == 3
+    assert all(len(v) == 32 for v in vectors)
+    assert provider.embed_batch(["甲"])[0] == provider.embed("甲")
+
+
+def test_embed_batch_empty():
+    provider = OpenAICompatibleProvider()
+    assert provider.embed_batch([]) == []

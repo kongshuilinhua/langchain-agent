@@ -179,8 +179,7 @@ class OpenAICompatibleProvider:
         api_key = self._api_key(settings, runtime_config, purpose="embedding")
         if settings.mock_llm:
             self.last_embed_mock = True
-            digest = hashlib.sha256(text.encode("utf-8")).digest()
-            return [((digest[i % len(digest)] / 255.0) * 2) - 1 for i in range(32)]
+            return self._mock_embed(text)
         if not api_key:
             raise RuntimeError("Embedding API key is not configured")
         self.last_embed_mock = False
@@ -189,6 +188,33 @@ class OpenAICompatibleProvider:
         payload = {"model": settings.openai_embedding_model, "input": text}
         data = self._post_json(url, payload, api_key)
         return data["data"][0]["embedding"]
+
+    @staticmethod
+    def _mock_embed(text: str) -> list[float]:
+        """脱机/测试模式下的确定性 32 维 mock 向量（与 embed 单条逻辑一致，供批量复用）。"""
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        return [((digest[i % len(digest)] / 255.0) * 2) - 1 for i in range(32)]
+
+    def embed_batch(self, texts: list[str], *, runtime_config: dict | None = None, batch_size: int = 16) -> list[list[float]]:
+        """批量文本向量化。OpenAI 兼容 embeddings 接口原生支持 list 输入，分批请求以降低往返次数。"""
+        if not texts:
+            return []
+        settings = get_settings()
+        if settings.mock_llm:
+            self.last_embed_mock = True
+            return [self._mock_embed(text) for text in texts]
+        api_key = self._api_key(settings, runtime_config, purpose="embedding")
+        if not api_key:
+            raise RuntimeError("Embedding API key is not configured")
+        self.last_embed_mock = False
+        url = self._api_base(settings, runtime_config, purpose="embedding").rstrip("/") + "/embeddings"
+        out: list[list[float]] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            data = self._post_json(url, {"model": settings.openai_embedding_model, "input": batch}, api_key)
+            items = sorted(data["data"], key=lambda item: item.get("index", 0))
+            out.extend(item["embedding"] for item in items)
+        return out
 
     def rerank(self, query: str, documents: list[str], *, top_n: int | None = None, model: str | None = None) -> list[dict]:
         """
