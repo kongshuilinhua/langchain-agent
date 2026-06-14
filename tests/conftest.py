@@ -3,25 +3,33 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
 
 @pytest.fixture()
 def client(monkeypatch):
     database_url = os.getenv("TEST_DATABASE_URL")
-    if not database_url or not database_url.startswith("postgresql"):
-        pytest.skip("PostgreSQL test database required. Set TEST_DATABASE_URL. The fixture resets the public schema.")
+    if not database_url:
+        pytest.skip("Test database required. Set TEST_DATABASE_URL.")
 
-    _terminate_postgres_database_connections(database_url)
+    _terminate_database_connections(database_url)
     engine = create_engine(database_url, future=True)
     try:
         with engine.begin() as connection:
-            connection.execute(text("SET lock_timeout = '10s'"))
-            connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
-            connection.execute(text("CREATE SCHEMA public"))
+            dialect_name = engine.dialect.name
+            if dialect_name == "postgresql":
+                connection.execute(text("SET lock_timeout = '10s'"))
+                connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+                connection.execute(text("CREATE SCHEMA public"))
+            elif dialect_name == "mysql":
+                connection.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+                db_inspector = inspect(engine)
+                for table in db_inspector.get_table_names():
+                    connection.execute(text(f"DROP TABLE IF EXISTS `{table}`"))
+                connection.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
     except Exception as exc:
-        pytest.skip(f"PostgreSQL test database is not available: {exc}")
+        pytest.skip(f"Test database is not available: {exc}")
     finally:
         engine.dispose()
 
@@ -62,8 +70,11 @@ def client(monkeypatch):
             db_session.engine.dispose()
 
 
-def _terminate_postgres_database_connections(database_url: str) -> None:
+def _terminate_database_connections(database_url: str) -> None:
+    """Terminate active connections to the test database (PostgreSQL only)."""
     url = make_url(database_url)
+    if url.get_dialect().name != "postgresql":
+        return  # Only applicable to PostgreSQL
     database = url.database
     if not database:
         return

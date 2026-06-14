@@ -52,7 +52,7 @@ def main(argv: list[str]) -> int:
         if os.getenv("TEST_DATABASE_URL"):
             steps.append(("pytest", [python, "-m", "pytest"], root))
         else:
-            print("Skipping pytest: set TEST_DATABASE_URL to an isolated PostgreSQL database. The test fixture resets the public schema.")
+            print("Skipping pytest: set TEST_DATABASE_URL to an isolated test database.")
     steps.extend(
         [
             ("compileall", [python, "-m", "compileall", *PYTHON_TARGETS], root),

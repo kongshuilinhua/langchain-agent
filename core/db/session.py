@@ -79,13 +79,16 @@ def _run_compat_migrations() -> None:
         agent_indexes = {index["name"] for index in inspector.get_indexes("agents")}
         if "ix_agents_user_model_config_id" not in agent_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agents_user_model_config_id ON agents (user_model_config_id)"))
+                connection.execute(text("CREATE INDEX ix_agents_user_model_config_id ON agents (user_model_config_id)"))
         
         avatar_col = next((col for col in inspector.get_columns("agents") if col["name"] == "avatar"), None)
         if avatar_col and getattr(avatar_col["type"], "length", None) == 40:
             if engine.dialect.name == "postgresql":
                 with engine.begin() as connection:
                     connection.execute(text("ALTER TABLE agents ALTER COLUMN avatar TYPE TEXT"))
+            elif engine.dialect.name == "mysql":
+                with engine.begin() as connection:
+                    connection.execute(text("ALTER TABLE agents MODIFY COLUMN avatar TEXT"))
     if "user_model_configs" in table_names:
         _ensure_columns(
             "user_model_configs",
@@ -104,6 +107,29 @@ def _run_compat_migrations() -> None:
                         "ON user_model_configs (user_id) WHERE is_default = true"
                     )
                 )
+        elif engine.dialect.name == "mysql":
+            user_config_columns = {col["name"] for col in inspector.get_columns("user_model_configs")}
+            if "is_default_ukey" not in user_config_columns:
+                with engine.begin() as connection:
+                    # 添加普通列（MySQL 生成列不能引用外键列，改用触发器维护）
+                    connection.execute(text(
+                        "ALTER TABLE user_model_configs ADD COLUMN is_default_ukey VARCHAR(64) NULL"
+                    ))
+                    # 唯一索引：MySQL 忽略 NULL，实现部分唯一约束效果
+                    connection.execute(text(
+                        "CREATE UNIQUE INDEX uq_one_default_per_user ON user_model_configs (is_default_ukey)"
+                    ))
+                    # 触发器：自动同步 is_default_ukey 的值
+                    connection.execute(text(
+                        "CREATE TRIGGER trg_umc_default_ins "
+                        "BEFORE INSERT ON user_model_configs FOR EACH ROW "
+                        "SET NEW.is_default_ukey = IF(NEW.is_default = 1, CAST(NEW.user_id AS CHAR(64)), NULL)"
+                    ))
+                    connection.execute(text(
+                        "CREATE TRIGGER trg_umc_default_upd "
+                        "BEFORE UPDATE ON user_model_configs FOR EACH ROW "
+                        "SET NEW.is_default_ukey = IF(NEW.is_default = 1, CAST(NEW.user_id AS CHAR(64)), NULL)"
+                    ))
     if "model_configs" in table_names:
         _ensure_columns(
             "model_configs",
@@ -144,13 +170,46 @@ def _run_compat_migrations() -> None:
         tool_indexes = {index["name"] for index in inspector.get_indexes("tools")}
         if "ix_tools_workspace_id" not in tool_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tools_workspace_id ON tools (workspace_id)"))
+                connection.execute(text("CREATE INDEX ix_tools_workspace_id ON tools (workspace_id)"))
         if "ix_tools_user_id" not in tool_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tools_user_id ON tools (user_id)"))
+                connection.execute(text("CREATE INDEX ix_tools_user_id ON tools (user_id)"))
         if "ix_tools_name" not in tool_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tools_name ON tools (name)"))
+                connection.execute(text("CREATE INDEX ix_tools_name ON tools (name)"))
+        # MySQL: partial unique indexes via triggers (generated columns can't reference FK columns)
+        if engine.dialect.name == "mysql":
+            tool_cols = {col["name"] for col in inspector.get_columns("tools")}
+            if "global_name_ukey" not in tool_cols:
+                with engine.begin() as connection:
+                    connection.execute(text("ALTER TABLE tools ADD COLUMN global_name_ukey VARCHAR(200) NULL"))
+                    connection.execute(text("CREATE UNIQUE INDEX uq_tools_global_name ON tools (global_name_ukey)"))
+                    connection.execute(text(
+                        "CREATE TRIGGER trg_tools_global_name_ins "
+                        "BEFORE INSERT ON tools FOR EACH ROW "
+                        "SET NEW.global_name_ukey = IF(NEW.workspace_id IS NULL AND NEW.user_id IS NULL, NEW.name, NULL)"
+                    ))
+                    connection.execute(text(
+                        "CREATE TRIGGER trg_tools_global_name_upd "
+                        "BEFORE UPDATE ON tools FOR EACH ROW "
+                        "SET NEW.global_name_ukey = IF(NEW.workspace_id IS NULL AND NEW.user_id IS NULL, NEW.name, NULL)"
+                    ))
+            if "owner_name_ukey" not in tool_cols:
+                with engine.begin() as connection:
+                    connection.execute(text("ALTER TABLE tools ADD COLUMN owner_name_ukey VARCHAR(400) NULL"))
+                    connection.execute(text("CREATE UNIQUE INDEX uq_tools_owner_name ON tools (owner_name_ukey)"))
+                    connection.execute(text(
+                        "CREATE TRIGGER trg_tools_owner_name_ins "
+                        "BEFORE INSERT ON tools FOR EACH ROW "
+                        "SET NEW.owner_name_ukey = IF(NEW.workspace_id IS NOT NULL AND NEW.user_id IS NOT NULL, "
+                        "CONCAT(NEW.workspace_id, ':', NEW.user_id, ':', NEW.name), NULL)"
+                    ))
+                    connection.execute(text(
+                        "CREATE TRIGGER trg_tools_owner_name_upd "
+                        "BEFORE UPDATE ON tools FOR EACH ROW "
+                        "SET NEW.owner_name_ukey = IF(NEW.workspace_id IS NOT NULL AND NEW.user_id IS NOT NULL, "
+                        "CONCAT(NEW.workspace_id, ':', NEW.user_id, ':', NEW.name), NULL)"
+                    ))
     if "agent_tools" in table_names:
         _ensure_columns(
             "agent_tools",
@@ -178,13 +237,13 @@ def _run_compat_migrations() -> None:
         memory_indexes = {index["name"] for index in inspector.get_indexes("agent_memory_profiles")}
         if "ix_agent_memory_profiles_workspace_id" not in memory_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_memory_profiles_workspace_id ON agent_memory_profiles (workspace_id)"))
+                connection.execute(text("CREATE INDEX ix_agent_memory_profiles_workspace_id ON agent_memory_profiles (workspace_id)"))
         if "ix_agent_memory_profiles_user_id" not in memory_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_memory_profiles_user_id ON agent_memory_profiles (user_id)"))
+                connection.execute(text("CREATE INDEX ix_agent_memory_profiles_user_id ON agent_memory_profiles (user_id)"))
         if "ix_agent_memory_profiles_agent_id" not in memory_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_memory_profiles_agent_id ON agent_memory_profiles (agent_id)"))
+                connection.execute(text("CREATE INDEX ix_agent_memory_profiles_agent_id ON agent_memory_profiles (agent_id)"))
         unique_constraints = {constraint["name"] for constraint in inspector.get_unique_constraints("agent_memory_profiles")}
         if "uq_agent_memory_profile_scope" not in unique_constraints and "uq_agent_memory_profile_scope" not in memory_indexes:
             with engine.begin() as connection:
@@ -213,16 +272,16 @@ def _run_compat_migrations() -> None:
         prompt_indexes = {index["name"] for index in inspector.get_indexes("prompt_templates")}
         if "ix_prompt_templates_workspace_id" not in prompt_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_prompt_templates_workspace_id ON prompt_templates (workspace_id)"))
+                connection.execute(text("CREATE INDEX ix_prompt_templates_workspace_id ON prompt_templates (workspace_id)"))
         if "ix_prompt_templates_user_id" not in prompt_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_prompt_templates_user_id ON prompt_templates (user_id)"))
+                connection.execute(text("CREATE INDEX ix_prompt_templates_user_id ON prompt_templates (user_id)"))
         if "ix_prompt_templates_category" not in prompt_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_prompt_templates_category ON prompt_templates (category)"))
+                connection.execute(text("CREATE INDEX ix_prompt_templates_category ON prompt_templates (category)"))
         if "ix_prompt_templates_enabled" not in prompt_indexes:
             with engine.begin() as connection:
-                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_prompt_templates_enabled ON prompt_templates (enabled)"))
+                connection.execute(text("CREATE INDEX ix_prompt_templates_enabled ON prompt_templates (enabled)"))
         unique_constraints = {constraint["name"] for constraint in inspector.get_unique_constraints("prompt_templates")}
         if "uq_prompt_templates_owner_title" not in unique_constraints and "uq_prompt_templates_owner_title" not in prompt_indexes:
             with engine.begin() as connection:
@@ -236,6 +295,9 @@ def _run_compat_migrations() -> None:
         if engine.dialect.name == "postgresql":
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE knowledge_documents ALTER COLUMN content_type TYPE VARCHAR(120)"))
+        elif engine.dialect.name == "mysql":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE knowledge_documents MODIFY COLUMN content_type VARCHAR(120)"))
         _ensure_columns(
             "knowledge_documents",
             {
@@ -297,7 +359,7 @@ def _run_compat_migrations() -> None:
         }.items():
             if index_name not in chunk_indexes:
                 with engine.begin() as connection:
-                    connection.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON knowledge_chunks ({column_name})"))
+                    connection.execute(text(f"CREATE INDEX {index_name} ON knowledge_chunks ({column_name})"))
         with engine.begin() as connection:
             connection.execute(
                 text(
@@ -348,6 +410,12 @@ def _run_compat_migrations() -> None:
                 "new_value": "你是一个谨慎、清晰的智能体。优先使用绑定知识库和工具输出回答。",
             },
         )
+
+    if "uploads" in table_names:
+        if engine.dialect.name == "mysql":
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE uploads MODIFY COLUMN data_url MEDIUMTEXT NOT NULL"))
+                connection.execute(text("ALTER TABLE uploads MODIFY COLUMN text MEDIUMTEXT NOT NULL"))
 
     if "sessions" in table_names:
         _ensure_columns(

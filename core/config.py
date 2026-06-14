@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
     # ── 数据库 ──────────────────────────────────────────────────
     database_url: str = Field(
-        default="postgresql+psycopg2://lingshu:lingshu@192.168.150.101:5433/lingshu_agent",
+        default="mysql+pymysql://lingshu:lingshu@192.168.150.101:3306/lingshu_agent",
         alias="DATABASE_URL",
     )
     # Redis 用于 RAG 检索结果缓存，非必须依赖（不配置则静默跳过缓存）

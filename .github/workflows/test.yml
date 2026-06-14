@@ -10,16 +10,17 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     services:
-      postgres:
-        image: postgres:16-alpine
+      mysql:
+        image: mysql:8.0
         env:
-          POSTGRES_DB: lingshu_agent_test
-          POSTGRES_USER: lingshu
-          POSTGRES_PASSWORD: lingshu
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: lingshu_agent_test
+          MYSQL_USER: lingshu
+          MYSQL_PASSWORD: lingshu
         ports:
-          - 5432:5432
+          - 3306:3306
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "mysqladmin ping -h localhost"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -46,7 +47,7 @@ jobs:
 
       - name: Run tests
         env:
-          TEST_DATABASE_URL: postgresql+psycopg2://lingshu:lingshu@localhost:5432/lingshu_agent_test
+          TEST_DATABASE_URL: mysql+pymysql://lingshu:lingshu@127.0.0.1:3306/lingshu_agent_test
           LINGSHU_MOCK_LLM: "true"
           LINGSHU_VECTOR_BACKEND: "memory"
           JWT_SECRET: test-secret-do-not-use-in-production

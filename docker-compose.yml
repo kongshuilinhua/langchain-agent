@@ -1,14 +1,16 @@
 ﻿services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:8.0
     environment:
-      POSTGRES_DB: lingshu_agent
-      POSTGRES_USER: lingshu
-      POSTGRES_PASSWORD: lingshu
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: lingshu_agent
+      MYSQL_USER: lingshu
+      MYSQL_PASSWORD: lingshu
     ports:
-      - "5433:5432"
+      - "3306:3306"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
 
   redis:
     image: redis:7-alpine
@@ -32,7 +34,7 @@
       context: .
       dockerfile: Dockerfile.api
     environment:
-      DATABASE_URL: postgresql+psycopg2://lingshu:lingshu@postgres:5432/lingshu_agent
+      DATABASE_URL: mysql+pymysql://lingshu:lingshu@mysql:3306/lingshu_agent
       REDIS_URL: redis://redis:6379/0
       LINGSHU_VECTOR_BACKEND: milvus
       MILVUS_URI: http://milvus:19530
@@ -45,7 +47,7 @@
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
+      - mysql
       - redis
       - milvus
 
@@ -60,6 +62,6 @@
       - api
 
 volumes:
-  postgres_data:
+  mysql_data:
   milvus_data:
 

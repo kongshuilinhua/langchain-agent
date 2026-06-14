@@ -6,7 +6,7 @@
 
 ## 项目概述
 
-Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + PostgreSQL，前端基于 Vite + Vue 3，支持用户创建、配置和发布自定义 AI 智能体，并在聊天页面中进行多轮对话。
+Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + MySQL，前端基于 Vite + React 18，支持用户创建、配置和发布自定义 AI 智能体，并在聊天页面中进行多轮对话。
 
 核心闭环：**用户注册 → 配置私有模型 → 创建智能体（绑定知识库 + 工具 + 提示词）→ 发布审核 → 内部市场复制 → 多轮聊天（支持深度思考 + RAG + 附件）。**
 
@@ -61,8 +61,8 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + PostgreSQL
 ### 知识库管理
 - 创建知识库（名称 + 描述）
 - 支持文本直接录入和文件上传（TXT/MD/CSV/PDF/DOCX）
-- 文档入库 → 文本提取 → 分段存储为 parent-child chunk → 写入向量库 + PostgreSQL
-- 文档列表、删除文档（同步清理 PostgreSQL + 向量数据）
+- 文档入库 → 文本提取 → 分段存储为 parent-child chunk → 写入向量库 + MySQL
+- 文档列表、删除文档（同步清理 MySQL + 向量数据）
 - 同步索引（reindex）：重建全部文档的向量索引
 - 支持自定义分段策略（层级分段 / 自定义分块参数 / 预览）
 - 索引作业状态查询（通过 Redis）
@@ -100,7 +100,7 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + PostgreSQL
 |------|------|------|
 | 后端框架 | FastAPI (Python 3.11) | 异步 API，Uvicorn 服务器 |
 | 前端 | Vite + Vue 3 + TypeScript + Tailwind CSS | 固定端口 `127.0.0.1:5174` |
-| 数据库 | PostgreSQL | SQLAlchemy ORM，20+ 张表 |
+| 数据库 | MySQL 8.0 | SQLAlchemy ORM，20+ 张表 |
 | 向量存储 | Milvus / 内存回退 | `LINGSHU_VECTOR_BACKEND` 切换 |
 | 缓存 | Redis | RAG 缓存 + 索引作业状态 |
 | LLM 网关 | OpenAI 兼容接口 | DashScope / DeepSeek / 自定义 |
@@ -184,7 +184,7 @@ JWT_SECRET=replace-with-a-long-random-secret
 API_KEY_ENCRYPTION_KEY=          # 可选，用于加密存储用户 API Key
 
 # 数据库
-DATABASE_URL=postgresql+psycopg2://lingshu:lingshu@192.168.150.101:5433/lingshu_agent
+DATABASE_URL=mysql+pymysql://lingshu:lingshu@192.168.150.101:3306/lingshu_agent
 
 # LLM 网关（三选一即可，优先使用 DASHSCOPE_API_KEY）
 OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -235,19 +235,19 @@ node --version   # 确认 >= 18（https://nodejs.org/）
 ### 基础设施（用 Docker 只跑数据库，API 和前端手动跑）
 
 ```powershell
-# 启动 postgres + redis + milvus
-docker compose up -d postgres redis milvus
+# 启动 mysql + redis + milvus
+docker compose up -d mysql redis milvus
 ```
 
 ```env
 # .env 中的连接地址指向 docker-compose 映射的本地端口
-DATABASE_URL=postgresql+psycopg2://lingshu:lingshu@localhost:5433/lingshu_agent
+DATABASE_URL=mysql+pymysql://lingshu:lingshu@localhost:3306/lingshu_agent
 REDIS_URL=redis://localhost:6380/0
 LINGSHU_VECTOR_BACKEND=milvus
 MILVUS_URI=http://localhost:19530
 ```
 
-如果没有 Docker，也可以单独安装 PostgreSQL / Redis / Milvus，或者开发阶段用内存向量模式（`LINGSHU_VECTOR_BACKEND=memory`），不装 Milvus 和 Redis 也能跑。
+如果没有 Docker，也可以单独安装 MySQL / Redis / Milvus，或者开发阶段用内存向量模式（`LINGSHU_VECTOR_BACKEND=memory`），不装 Milvus 和 Redis 也能跑。
 
 ### 后端
 
@@ -324,7 +324,7 @@ FastAPI (api/main.py)
           ├─→ [LLM]        调用 LLM (OpenAI 兼容接口) 生成回答
           └─→ [Answer]     输出最终回答 + 引用来源
           │
-          ├─→ PostgreSQL (消息/Session/Run/RunStep 持久化)
+          ├─→ MySQL (消息/Session/Run/RunStep 持久化)
           ├─→ Milvus / 内存 (向量检索)
           ├─→ Redis (RAG 缓存)
           └─→ LLM Provider (DashScope / DeepSeek / 自定义)
