@@ -120,3 +120,12 @@ def test_chunk_document_hierarchy_has_no_separate_parents():
     )
     assert children
     assert parents == []
+
+
+def test_parent_chunk_model_and_log_column_exist():
+    from core.db.models import KnowledgeDocument, KnowledgeParentChunk
+
+    cols = KnowledgeParentChunk.__table__.columns.keys()
+    for name in ["workspace_id", "knowledge_base_id", "document_id", "parent_id", "text", "content_hash"]:
+        assert name in cols
+    assert "ingestion_log" in KnowledgeDocument.__table__.columns.keys()

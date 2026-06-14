@@ -354,6 +354,7 @@ class KnowledgeDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
     segment_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ingestion_log: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 
@@ -388,6 +389,21 @@ class KnowledgeChunk(Base):
     embedding_model: Mapped[str] = mapped_column(String(160), default="")
     embedding_dimension: Mapped[int] = mapped_column(Integer, default=0)
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+
+
+class KnowledgeParentChunk(Base):
+    """父块表：存 parent-child 分段的父块全文，仅供检索后扩展上下文，不参与检索（不 embedding）。"""
+    __tablename__ = "knowledge_parent_chunks"
+    __table_args__ = (UniqueConstraint("document_id", "parent_id", name="uq_parent_chunk_doc_parent"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    knowledge_base_id: Mapped[int] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
+    parent_id: Mapped[str] = mapped_column(String(120), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
 class Tool(Base):
