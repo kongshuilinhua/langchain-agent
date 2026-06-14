@@ -50,3 +50,24 @@ def test_decide_route_low_confidence_without_clarify_falls_back():
 
 def test_decide_route_unknown_intent_defaults_knowledge():
     assert decide_route("garbage", 0.9, _CFG)[0] == ROUTE_KNOWLEDGE
+
+
+from core.services.query_understanding import _parse_understanding
+
+
+def test_parse_plain_json():
+    data = _parse_understanding('{"rewritten_query": "X的价格", "intent": "knowledge", "confidence": 0.9}')
+    assert data["rewritten_query"] == "X的价格"
+    assert data["intent"] == "knowledge"
+    assert data["confidence"] == 0.9
+
+
+def test_parse_json_in_code_fence():
+    content = "```json\n{\"rewritten_query\": \"你好\", \"intent\": \"chitchat\", \"confidence\": 0.95}\n```"
+    data = _parse_understanding(content)
+    assert data["intent"] == "chitchat"
+
+
+def test_parse_garbage_returns_none():
+    assert _parse_understanding("这不是 JSON") is None
+    assert _parse_understanding("") is None
