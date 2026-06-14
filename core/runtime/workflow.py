@@ -150,11 +150,7 @@ class WorkflowRunner:
         for node in runtime.workflow:
             output = self._execute_node(runtime, node, context)
             if not steps:
-                # 首节点强制注入记忆、深度思考与网络搜索的特征事件，方便前端首帧渲染状态栏
-                output.setdefault("events", []).append({"event": "memory_used", "data": profile_memory_event})
-                output.setdefault("events", []).append({"event": "thinking_status", "data": thinking_status})
-                output.setdefault("events", []).append({"event": "search_status", "data": self._search_status_event(search_status)})
-                output.setdefault("events", []).append({"event": "query_understanding", "data": context.get("query_understanding_event", {})})
+                self._inject_first_node_events(output, context)
             events = output.pop("events", [])
             context.update(output)
             step = RunStep(
@@ -238,10 +234,7 @@ class WorkflowRunner:
             else:
                 output = self._execute_node(runtime, node, context)
             if not steps:
-                output.setdefault("events", []).append({"event": "memory_used", "data": context.get("profile_memory_used", {})})
-                output.setdefault("events", []).append({"event": "thinking_status", "data": context.get("thinking_status", {})})
-                output.setdefault("events", []).append({"event": "search_status", "data": self._search_status_event(context.get("search_status", {}))})
-                output.setdefault("events", []).append({"event": "query_understanding", "data": context.get("query_understanding_event", {})})
+                self._inject_first_node_events(output, context)
             events = output.pop("events", [])
             context.update(output)
             step = self._persist_step(run, node, user_message, output)
@@ -413,7 +406,7 @@ class WorkflowRunner:
                     "cache": {"enabled": False, "hit": False, "backend": "none"},
                     "no_evidence": False,
                 }
-                return {"sources": [], "rag_status": status, "events": [{"event": "rag_status", "data": status}]}
+                return {"sources": [], "rag_enabled": True, "rag_status": status, "events": [{"event": "rag_status", "data": status}]}
 
             kb_ids = getattr(agent, "knowledge_base_ids", None)
             if kb_ids is None:
@@ -868,6 +861,14 @@ class WorkflowRunner:
                 "reason": str(exc),
             }
 
+    def _inject_first_node_events(self, output: dict, context: dict) -> None:
+        """首节点统一注入记忆/思考/搜索/查询理解状态事件（run 与 run_events 共用）。"""
+        events = output.setdefault("events", [])
+        events.append({"event": "memory_used", "data": context.get("profile_memory_used", {})})
+        events.append({"event": "thinking_status", "data": context.get("thinking_status", {})})
+        events.append({"event": "search_status", "data": self._search_status_event(context.get("search_status", {}))})
+        events.append({"event": "query_understanding", "data": context.get("query_understanding_event", {})})
+
     def _search_status_event(self, status: dict) -> dict:
         return {key: value for key, value in status.items() if key != "sources"}
 
@@ -940,7 +941,9 @@ class WorkflowRunner:
         context["route"] = result.route
         context["query_understanding_event"] = result.event_payload()
         if result.route == qu_service.ROUTE_CLARIFY and result.clarification:
-            # 短路：预置 draft，让 LLM/Answer 节点直接输出澄清反问
+            # 短路契约：clarify 路由预置 draft 作为澄清反问。下游节点（Start/Knowledge/Tool）
+            # 不得在其 output 中返回 "draft" 键，否则 context.update 会覆盖此澄清文本；
+            # LLM 节点会检测到已存在的 draft 并直接输出（含流式模拟）。
             context["draft"] = result.clarification
 
     @staticmethod

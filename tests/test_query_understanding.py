@@ -155,10 +155,22 @@ def test_analyze_uses_configured_model():
     assert provider.calls[0]["model"] == "qwen-turbo"
 
 
-def test_route_gates_retrieval_helper():
-    # 该断言锁定 Knowledge 节点门控契约：仅 route==knowledge 才检索
-    def should_retrieve(rag_enabled: bool, route: str) -> bool:
-        return rag_enabled and route == ROUTE_KNOWLEDGE
-    assert should_retrieve(True, ROUTE_KNOWLEDGE) is True
-    assert should_retrieve(True, ROUTE_CHITCHAT) is False
-    assert should_retrieve(False, ROUTE_KNOWLEDGE) is False
+def test_execute_node_knowledge_skips_retrieval_on_nonknowledge_route():
+    from core.runtime.workflow import WorkflowRunner
+    runner = WorkflowRunner(None)
+    node = {"id": "knowledge", "type": "Knowledge", "name": "x", "config": {"top_k": 4}}
+    context = {"input": "你好", "rag_enabled": True, "route": "chitchat", "rag_top_k": 4}
+    output = runner._execute_node(None, node, context)
+    assert output["sources"] == []
+    assert output["rag_enabled"] is True
+    assert output["rag_status"]["reason"] == "skipped_by_route:chitchat"
+
+
+def test_execute_node_knowledge_respects_rag_disabled():
+    from core.runtime.workflow import WorkflowRunner
+    runner = WorkflowRunner(None)
+    node = {"id": "knowledge", "type": "Knowledge", "name": "x", "config": {"top_k": 4}}
+    context = {"input": "问题", "rag_enabled": False, "route": "knowledge", "rag_top_k": 4}
+    output = runner._execute_node(None, node, context)
+    assert output["sources"] == []
+    assert output["rag_enabled"] is False
