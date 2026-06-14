@@ -1,4 +1,15 @@
-from core.services.agents import normalize_query_understanding, DEFAULT_QUERY_UNDERSTANDING
+from core.integrations.llm import ChatResponse
+from core.services.agents import DEFAULT_QUERY_UNDERSTANDING, normalize_query_understanding
+from core.services.query_understanding import (
+    ROUTE_CHITCHAT,
+    ROUTE_CLARIFY,
+    ROUTE_KNOWLEDGE,
+    ROUTE_TOOL,
+    QueryUnderstanding,
+    _parse_understanding,
+    analyze,
+    decide_route,
+)
 
 
 def test_normalize_defaults_on_empty():
@@ -19,14 +30,6 @@ def test_normalize_blank_model_becomes_none():
     result = normalize_query_understanding({"model": "   "})
     assert result["model"] is None
 
-
-from core.services.query_understanding import (
-    decide_route,
-    ROUTE_KNOWLEDGE,
-    ROUTE_TOOL,
-    ROUTE_CHITCHAT,
-    ROUTE_CLARIFY,
-)
 
 _CFG = {"confidence_threshold": 0.5, "clarify_enabled": True}
 
@@ -52,9 +55,6 @@ def test_decide_route_unknown_intent_defaults_knowledge():
     assert decide_route("garbage", 0.9, _CFG)[0] == ROUTE_KNOWLEDGE
 
 
-from core.services.query_understanding import _parse_understanding
-
-
 def test_parse_plain_json():
     data = _parse_understanding('{"rewritten_query": "X的价格", "intent": "knowledge", "confidence": 0.9}')
     assert data["rewritten_query"] == "X的价格"
@@ -71,10 +71,6 @@ def test_parse_json_in_code_fence():
 def test_parse_garbage_returns_none():
     assert _parse_understanding("这不是 JSON") is None
     assert _parse_understanding("") is None
-
-
-from core.integrations.llm import ChatResponse
-from core.services.query_understanding import analyze, QueryUnderstanding
 
 
 class _FakeProvider:
