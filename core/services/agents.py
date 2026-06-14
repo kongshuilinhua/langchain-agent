@@ -49,6 +49,13 @@ DEFAULT_RAG = {
     "refuse_when_no_evidence": True,
 }
 DEFAULT_TOOL_POLICY = {"mode": "auto", "allowed_tool_names": []}
+DEFAULT_QUERY_UNDERSTANDING = {
+    "enabled": True,
+    "model": None,
+    "confidence_threshold": 0.5,
+    "clarify_enabled": True,
+    "history_turns": 4,
+}
 
 # 🛡️ 兼容性演进：旧版本系统词汇转换为个人友好词汇（智能体去团队化规整）
 LEGACY_TEAM_AGENT_TEXT = {
@@ -506,6 +513,28 @@ def normalize_tool_policy(value) -> dict:
     mode = data.get("mode") if data.get("mode") == "auto" else "auto"
     names = [str(item).strip() for item in data.get("allowed_tool_names", []) if str(item).strip()]
     return {"mode": mode, "allowed_tool_names": names[:50]}
+
+
+def normalize_query_understanding(value) -> dict:
+    """规整查询理解层配置。
+
+    🧠 边界限制：
+        - confidence_threshold 夹紧到 [0.0, 1.0]。
+        - history_turns 夹紧到 [1, 12]，避免改写时塞入过多历史撑爆 Token。
+        - model 为空白字符串时归一为 None（表示复用 agent 当前模型）。
+    """
+    data = value.model_dump() if hasattr(value, "model_dump") else dict(value or {})
+    threshold = float(data.get("confidence_threshold", 0.5) or 0.5)
+    history_turns = int(data.get("history_turns") or 4)
+    raw_model = data.get("model")
+    model = str(raw_model).strip() if raw_model else ""
+    return {
+        "enabled": bool(data.get("enabled", True)),
+        "model": model or None,
+        "confidence_threshold": min(max(threshold, 0.0), 1.0),
+        "clarify_enabled": bool(data.get("clarify_enabled", True)),
+        "history_turns": max(1, min(history_turns, 12)),
+    }
 
 
 def _replace_agent_knowledge(db: Session, agent_id: int, knowledge_base_ids: list[int]) -> None:
