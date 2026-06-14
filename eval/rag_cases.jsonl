@@ -1,2 +1,4 @@
 {"id":"hybrid-basic","question":"hybrid-source-token 是什么？","expected_sources":["hybrid.txt"],"keywords":["hybrid-source-token"],"should_refuse":false}
 {"id":"no-evidence","question":"知识库没有的随机问题 zzz-final-missing","expected_sources":[],"keywords":[],"should_refuse":true}
+{"id":"chitchat-1","question":"你好呀","intent":"chitchat","expected_sources":[],"keywords":[],"should_refuse":false}
+{"id":"coref-1","question":"那它的保修期呢","intent":"knowledge","expected_sources":["产品手册"],"keywords":["保修"],"should_refuse":false}
