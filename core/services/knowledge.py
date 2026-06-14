@@ -402,6 +402,79 @@ def chunk_csv(
     return children, parents
 
 
+def _chunk_parent_child(
+    text: str,
+    *,
+    kb_id: int,
+    document_id: int,
+    parent_size: int = 1600,
+    child_size: int = 520,
+    overlap: int = 80,
+) -> tuple[list[dict], list[dict]]:
+    """parent-child 分段，返回 (children, parents)。children 形状与 split_parent_child 一致，另收集父块全文。"""
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    children: list[dict] = []
+    parents: list[dict] = []
+    if not cleaned:
+        return children, parents
+    parent_index = 0
+    step = max(child_size - overlap, 1)
+    for parent_start in range(0, len(cleaned), parent_size):
+        parent_text = cleaned[parent_start : parent_start + parent_size]
+        parent_id = f"kb{kb_id}-doc{document_id}-parent{parent_index}"
+        parents.append({
+            "parent_id": parent_id,
+            "text": parent_text,
+            "content_hash": hashlib.sha256(parent_text.encode("utf-8")).hexdigest(),
+        })
+        child_index = 0
+        for child_start in range(0, len(parent_text), step):
+            child_text = parent_text[child_start : child_start + child_size].strip()
+            if not child_text:
+                continue
+            children.append({
+                "parent_id": parent_id,
+                "chunk_id": f"{parent_id}-child{child_index}",
+                "text": child_text,
+                "page": None,
+                "section": "",
+                "content_hash": hashlib.sha256(child_text.encode("utf-8")).hexdigest(),
+            })
+            child_index += 1
+        parent_index += 1
+    return children, parents
+
+
+def chunk_document(
+    text: str,
+    *,
+    content_type: str,
+    kb_id: int,
+    document_id: int,
+    segment_config: dict | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """入库分段总分发器，返回 (children, parents)。CSV(auto 模式) 走结构化；hierarchy 无独立父块层。"""
+    cfg = segment_config or {}
+    seg_mode = cfg.get("segment_mode", "auto")
+    if "csv" in (content_type or "").lower() and seg_mode == "auto":
+        return chunk_csv(text, kb_id=kb_id, document_id=document_id)
+    if seg_mode == "hierarchy":
+        children = split_by_hierarchy(
+            text, kb_id=kb_id, document_id=document_id,
+            max_level=cfg.get("hierarchy_level", 3),
+            keep_hierarchy_info=cfg.get("keep_hierarchy_info", True),
+        )
+        return children, []
+    if seg_mode == "custom":
+        return _chunk_parent_child(
+            text, kb_id=kb_id, document_id=document_id,
+            parent_size=cfg.get("max_chunk_len", 1600),
+            child_size=int(cfg.get("max_chunk_len", 1600) * 0.35),
+            overlap=int(cfg.get("max_chunk_len", 1600) * cfg.get("overlap_pct", 10) / 100),
+        )
+    return _chunk_parent_child(text, kb_id=kb_id, document_id=document_id)
+
+
 def split_parent_child(
     text: str,
     *,

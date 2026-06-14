@@ -1,7 +1,7 @@
 from core.integrations.llm import OpenAICompatibleProvider
 from core.services.ingestion.context import IngestionContext
 from core.services.ingestion.pipeline import IngestionNode, IngestionPipeline, IngestionPipelineError
-from core.services.knowledge import chunk_csv
+from core.services.knowledge import chunk_csv, chunk_document
 from core.services.uploads import decode_bytes
 
 
@@ -92,3 +92,31 @@ def test_pipeline_records_failed_node_and_raises():
         assert exc.node == "boom"
     assert ctx.logs[-1]["node"] == "boom"
     assert ctx.logs[-1]["status"] == "failed"
+
+
+def test_chunk_document_csv_dispatch():
+    children, parents = chunk_document(
+        "name,price\n甲,10\n乙,20", content_type="text/csv", kb_id=1, document_id=2, segment_config=None
+    )
+    assert children and parents
+    assert all("name" in c["text"] for c in children)
+
+
+def test_chunk_document_text_returns_children_and_parents():
+    text = "段落一。" * 400  # 足够长以产生多个父块
+    children, parents = chunk_document(
+        text, content_type="text/plain", kb_id=1, document_id=3, segment_config=None
+    )
+    assert children and parents
+    parent_ids = {p["parent_id"] for p in parents}
+    assert all(c["parent_id"] in parent_ids for c in children)
+
+
+def test_chunk_document_hierarchy_has_no_separate_parents():
+    md = "# H1\n正文一\n## H2\n正文二"
+    children, parents = chunk_document(
+        md, content_type="text/markdown", kb_id=1, document_id=4,
+        segment_config={"segment_mode": "hierarchy"},
+    )
+    assert children
+    assert parents == []
