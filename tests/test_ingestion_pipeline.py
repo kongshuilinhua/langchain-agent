@@ -1,4 +1,6 @@
 from core.integrations.llm import OpenAICompatibleProvider
+from core.services.ingestion.context import IngestionContext
+from core.services.ingestion.pipeline import IngestionNode, IngestionPipeline, IngestionPipelineError
 from core.services.knowledge import chunk_csv
 from core.services.uploads import decode_bytes
 
@@ -47,3 +49,46 @@ def test_chunk_csv_header_in_every_child():
 
 def test_chunk_csv_empty():
     assert chunk_csv("", kb_id=1, document_id=1) == ([], [])
+
+
+def _ctx():
+    return IngestionContext(
+        workspace_id=1, knowledge_base_id=1, document_id=1,
+        filename="f.txt", content_type="text/plain", text="hello",
+    )
+
+
+def test_pipeline_runs_nodes_in_order_and_logs():
+    order = []
+
+    class A(IngestionNode):
+        name = "a"
+        def run(self, ctx):
+            order.append("a")
+
+    class B(IngestionNode):
+        name = "b"
+        def run(self, ctx):
+            order.append("b")
+
+    ctx = _ctx()
+    IngestionPipeline([A(), B()]).run(ctx)
+    assert order == ["a", "b"]
+    assert [log["node"] for log in ctx.logs] == ["a", "b"]
+    assert all(log["status"] == "succeeded" for log in ctx.logs)
+
+
+def test_pipeline_records_failed_node_and_raises():
+    class Boom(IngestionNode):
+        name = "boom"
+        def run(self, ctx):
+            raise ValueError("kaboom")
+
+    ctx = _ctx()
+    try:
+        IngestionPipeline([Boom()]).run(ctx)
+        assert False, "should have raised"
+    except IngestionPipelineError as exc:
+        assert exc.node == "boom"
+    assert ctx.logs[-1]["node"] == "boom"
+    assert ctx.logs[-1]["status"] == "failed"
