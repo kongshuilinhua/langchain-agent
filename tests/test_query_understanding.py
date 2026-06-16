@@ -155,17 +155,6 @@ def test_analyze_uses_configured_model():
     assert provider.calls[0]["model"] == "qwen-turbo"
 
 
-def test_execute_node_knowledge_skips_retrieval_on_nonknowledge_route():
-    from core.runtime.workflow import WorkflowRunner
-    runner = WorkflowRunner(None)
-    node = {"id": "knowledge", "type": "Knowledge", "name": "x", "config": {"top_k": 4}}
-    context = {"input": "你好", "rag_enabled": True, "route": "chitchat", "rag_top_k": 4}
-    output = runner._execute_node(None, node, context)
-    assert output["sources"] == []
-    assert output["rag_enabled"] is True
-    assert output["rag_status"]["reason"] == "skipped_by_route:chitchat"
-
-
 def test_execute_node_knowledge_respects_rag_disabled():
     from core.runtime.workflow import WorkflowRunner
     runner = WorkflowRunner(None)
@@ -174,3 +163,22 @@ def test_execute_node_knowledge_respects_rag_disabled():
     output = runner._execute_node(None, node, context)
     assert output["sources"] == []
     assert output["rag_enabled"] is False
+
+
+def test_understand_query_skips_llm_when_rag_disabled():
+    """知识库按钮关闭时不前置查询理解 LLM，直接 passthrough（普通对话不付前置推理开销）。"""
+    from types import SimpleNamespace
+    from core.runtime.workflow import WorkflowRunner
+
+    class _BoomProvider:
+        def chat(self, *args, **kwargs):
+            raise AssertionError("rag_enabled=False 时不应调用查询理解 LLM")
+
+    runner = WorkflowRunner(None)
+    runner.provider = _BoomProvider()
+    runtime = SimpleNamespace(settings={"query_understanding": {"enabled": True}}, runtime_config=None)
+    context = {"input": "1+1", "rag_enabled": False, "memory_summary": ""}
+    runner._understand_query(runtime, context)
+    assert context["rewritten_query"] == "1+1"
+    assert context["query_understanding_event"]["reason"] == "rag_disabled"
+    assert context["query_understanding_event"]["applied"] is False

@@ -847,9 +847,10 @@ def _exec_arxiv_search(args: dict) -> dict:
     if not query:
         return {"content": json.dumps({"error": "Query cannot be empty"}), "result_preview": "Error: Empty Query"}
     try:
-        url = f"http://export.arxiv.org/api/query?search_query=all:{urllib.parse.quote(query)}&max_results={max_results}"
-        resp = httpx.get(url, timeout=8)
-        
+        # arXiv 已将 http 端点 301 跳转到 https；httpx 默认不跟随重定向，故显式用 https + follow_redirects
+        url = f"https://export.arxiv.org/api/query?search_query=all:{urllib.parse.quote(query)}&max_results={max_results}"
+        resp = httpx.get(url, timeout=8, follow_redirects=True)
+
         xml_text = resp.text
         entries = []
         entry_blocks = re.findall(r'<entry>([\s\S]*?)<\/entry>', xml_text)
@@ -1263,6 +1264,12 @@ def _preview(value, limit: int = 500) -> str:
 def _search_query(context: dict) -> str:
     input_data = context.get("input")
     if isinstance(input_data, dict):
+        # 🛡️ 兼容部分模型把查询写成复数 `queries`（数组/字符串），而非 schema 里的 `query`
+        queries = input_data.get("queries")
+        if isinstance(queries, list) and queries:
+            return " ".join(str(item) for item in queries if item).strip() or "search"
+        if isinstance(queries, str) and queries.strip():
+            return queries.strip()
         return str(input_data.get("query") or input_data.get("q") or input_data.get("message") or "").strip() or "search"
     return str(context.get("input") or "").strip() or "search"
 

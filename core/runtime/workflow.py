@@ -393,21 +393,6 @@ class WorkflowRunner:
                 }
                 return {"sources": [], "rag_enabled": False, "rag_status": status, "events": [{"event": "rag_status", "data": status}]}
 
-            route = context.get("route", "knowledge")
-            if route != "knowledge":
-                status = {
-                    "enabled": True, "effective_source": effective_source,
-                    "knowledge_base_ids": [], "query": context["input"],
-                    "top_k": int(context.get("rag_top_k") or node.get("config", {}).get("top_k", 4)),
-                    "matched_chunks": 0, "sources_emitted": False,
-                    "reason": f"skipped_by_route:{route}",
-                    "dense": {"matched": 0}, "bm25": {"matched": 0}, "rrf": {"matched": 0},
-                    "rerank": {"enabled": False, "applied": False, "model": None, "error": None},
-                    "cache": {"enabled": False, "hit": False, "backend": "none"},
-                    "no_evidence": False,
-                }
-                return {"sources": [], "rag_enabled": True, "rag_status": status, "events": [{"event": "rag_status", "data": status}]}
-
             kb_ids = getattr(agent, "knowledge_base_ids", None)
             if kb_ids is None:
                 kb_ids = [
@@ -432,13 +417,17 @@ class WorkflowRunner:
         # 3. Tool 节点：极硬核 ReAct 自适应工具决策迭代循环 (The Core Brain of Agent)
         # ==========================================
         if node_type == "Tool":
-            if context.get("route") in ("chitchat", "clarify"):
-                return {"tool_outputs": [], "tool_stats": {"total_calls": 0, "tools_used": []}}
             bound_tools = self._runtime_tools(agent, node)
             tool_policy = (agent.settings.get("tool_policy") or {})
             allowed_names = set(tool_policy.get("allowed_tool_names") or [])
             if allowed_names:
                 bound_tools = [t for t in bound_tools if t.name in allowed_names]
+            # 🧠 设计修正：没有任何可用工具时直接空转返回。
+            # 但只要 Agent 绑定了工具，就不再因为查询理解把意图判成 chitchat/clarify
+            # 而提前剥夺工具——那会导致像「你能搜到这篇论文吗」这类问题被误判为闲聊、
+            # 模型根本看不到 arxiv_search 等工具。是否真正调用工具交由模型在
+            # tool_choice="auto" 下自行决策（纯闲聊时模型只回文本、不产生 tool_calls，
+            # 成本与原先跳过该节点一致）。
             if not bound_tools:
                 return {"tool_outputs": [], "tool_stats": {"total_calls": 0, "tools_used": []}}
 
@@ -925,26 +914,30 @@ class WorkflowRunner:
         return merged
 
     def _understand_query(self, runtime, context: dict) -> None:
-        """查询理解前置阶段：写入 rewritten_query / intent / route / clarification / 事件载荷。"""
-        config = runtime.settings.get("query_understanding") or {}
-        history = self._history_turns(context.get("memory_summary") or "")
-        result = qu_service.analyze(
-            self.provider,
-            user_message=context["input"],
-            history=history,
-            config=config,
-            runtime_config=getattr(runtime, "runtime_config", None),
-        )
+        """查询理解前置阶段：仅当用户开启「知识库」检索（rag_enabled）时，做一次轻量 LLM 调用，
+        把多轮指代/省略补全、改写成不依赖上下文的自包含 query 供检索使用。
+
+        是否走 RAG 完全由用户的「知识库」按钮决定，不再由模型意图路由裁决；也不再做低置信度
+        澄清反问（交由用户自己表达）。未开启知识库时直接 passthrough，省去这次前置 LLM 调用，
+        让普通对话直达 LLM 节点（避免「1+1」也要等一次前置推理）。
+        """
+        if not context.get("rag_enabled", True):
+            result = qu_service._passthrough(context["input"], reason="rag_disabled")
+        else:
+            config = runtime.settings.get("query_understanding") or {}
+            history = self._history_turns(context.get("memory_summary") or "")
+            result = qu_service.analyze(
+                self.provider,
+                user_message=context["input"],
+                history=history,
+                config=config,
+                runtime_config=getattr(runtime, "runtime_config", None),
+            )
         context["rewritten_query"] = result.rewritten_query
         context["intent"] = result.intent
         context["confidence"] = result.confidence
         context["route"] = result.route
         context["query_understanding_event"] = result.event_payload()
-        if result.route == qu_service.ROUTE_CLARIFY and result.clarification:
-            # 短路契约：clarify 路由预置 draft 作为澄清反问。下游节点（Start/Knowledge/Tool）
-            # 不得在其 output 中返回 "draft" 键，否则 context.update 会覆盖此澄清文本；
-            # LLM 节点会检测到已存在的 draft 并直接输出（含流式模拟）。
-            context["draft"] = result.clarification
 
     @staticmethod
     def _history_turns(memory_summary: str) -> list[dict]:

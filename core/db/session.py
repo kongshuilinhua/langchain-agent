@@ -417,6 +417,24 @@ def _run_compat_migrations() -> None:
                 connection.execute(text("ALTER TABLE uploads MODIFY COLUMN data_url MEDIUMTEXT NOT NULL"))
                 connection.execute(text("ALTER TABLE uploads MODIFY COLUMN text MEDIUMTEXT NOT NULL"))
 
+    # 🛡️ MySQL 的 TEXT 列上限仅 64KB，学术 PDF 正文/长会话会超（迁移自 PG 无限 TEXT 时埋的坑，
+    # 表现为大文档上传 500「Data too long for column 'text'」）。把承载大正文的列加宽为 LONGTEXT。
+    # 幂等：已是 LONGTEXT 则跳过，避免每次启动重写大表。
+    if engine.dialect.name == "mysql":
+        longtext_targets = [
+            ("knowledge_documents", "text"),
+            ("knowledge_chunks", "text"),
+            ("knowledge_parent_chunks", "text"),
+            ("messages", "content"),
+        ]
+        for tbl, col in longtext_targets:
+            if tbl not in table_names:
+                continue
+            col_info = next((c for c in inspector.get_columns(tbl) if c["name"] == col), None)
+            if col_info and "LONGTEXT" not in str(col_info["type"]).upper():
+                with engine.begin() as connection:
+                    connection.execute(text(f"ALTER TABLE {tbl} MODIFY COLUMN {col} LONGTEXT NOT NULL"))
+
     if "sessions" in table_names:
         _ensure_columns(
             "sessions",

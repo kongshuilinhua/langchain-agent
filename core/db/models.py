@@ -1,8 +1,13 @@
 from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
+
+# 🛡️ MySQL 的 TEXT 上限仅 64KB，学术 PDF/长会话正文轻松超出（迁移自 PG 无限 TEXT 时埋的坑）。
+# 用 LONGTEXT 变体承载可能很大的正文列；其它方言仍退化为标准 Text。
+LongText = Text().with_variant(LONGTEXT(), "mysql")
 
 
 def now() -> datetime:
@@ -346,7 +351,7 @@ class KnowledgeDocument(Base):
     title: Mapped[str] = mapped_column(String(255), default="")
     content_type: Mapped[str] = mapped_column(String(120))
     source_type: Mapped[str] = mapped_column(String(20), default="text")
-    text: Mapped[str] = mapped_column(Text, default="")
+    text: Mapped[str] = mapped_column(LongText, default="")
     text_preview: Mapped[str] = mapped_column(Text, default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
@@ -373,7 +378,7 @@ class KnowledgeChunk(Base):
     knowledge_base_id: Mapped[int] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
     chunk_index: Mapped[int] = mapped_column(Integer)
-    text: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(LongText)
     # ⚡ 边界与性能思考：vector_id 对应 Milvus 等外部向量库的主键 UUID，做唯一索引方便快速反查。
     vector_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     
@@ -401,7 +406,7 @@ class KnowledgeParentChunk(Base):
     knowledge_base_id: Mapped[int] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
     parent_id: Mapped[str] = mapped_column(String(120), index=True)
-    text: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(LongText)
     content_hash: Mapped[str] = mapped_column(String(80), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -501,7 +506,7 @@ class Message(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(20))  # 'user' / 'assistant'
-    content: Mapped[str] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(LongText)
     sources: Mapped[list] = mapped_column(JSON, default=list)  # 用于回显大模型回答的知识库召回引用
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 

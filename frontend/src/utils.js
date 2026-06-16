@@ -1,6 +1,6 @@
 ﻿// Phase 4: Re-exported from lib/ (single source of truth)
 import { API_BASE, AUTH_TOKEN_KEY, LEGACY_AUTH_TOKEN_KEY, ApiError, isAuthError, notifyAuthExpired, initialAuthToken, errorMessage, api } from './lib/api.js';
-import { MAX_UPLOAD_BYTES, KNOWLEDGE_FILE_ACCEPT, KNOWLEDGE_FILE_EXTENSIONS } from './lib/upload.js';
+import { MAX_UPLOAD_BYTES, MAX_KNOWLEDGE_BYTES, KNOWLEDGE_FILE_ACCEPT, KNOWLEDGE_FILE_EXTENSIONS } from './lib/upload.js';
 import { roleLabel, avatarInitial, isAdminRole, statusLabel } from './lib/format.js';
 
 const JIGE_PROMPT = [
@@ -471,8 +471,8 @@ function guessContentType(filename) {
 }
 
 function validateKnowledgeFile(file) {
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error('知识库文件不能超过 8MB');
+  if (file.size > MAX_KNOWLEDGE_BYTES) {
+    throw new Error('知识库文件不能超过 30MB');
   }
   const suffix = String(file.name || '').toLowerCase().split('.').pop();
   if (!KNOWLEDGE_FILE_EXTENSIONS.includes(suffix)) {

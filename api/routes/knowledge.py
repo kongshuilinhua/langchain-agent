@@ -18,6 +18,7 @@ from core.services.knowledge import (
     delete_document,
     delete_knowledge_base,
     document_payload,
+    extract_upload_text,
     index_document,
     knowledge_base_summary,
     list_document_chunks,
@@ -42,6 +43,42 @@ class ResegmentRequest(BaseModel):
     overlap_pct: int = 10
     hierarchy_level: int = 3
     keep_hierarchy_info: bool = True
+
+
+class PreviewUploadRequest(ResegmentRequest):
+    """上传前预览：携带原始文件内容，提取文本后按策略在内存中切片，不落库。"""
+    filename: str
+    content_type: str = "application/octet-stream"
+    content_base64: str
+
+
+def _chunks_for_segment(text: str, *, kb_id: int, document_id: int, cfg: dict) -> list[dict]:
+    """按 segment_mode 选择切片器，返回切片列表（预览专用，不落库）。"""
+    seg_mode = cfg.get("segment_mode", "auto")
+    if seg_mode == "hierarchy":
+        return split_by_hierarchy(
+            text, kb_id=kb_id, document_id=document_id,
+            max_level=cfg.get("hierarchy_level", 3),
+            keep_hierarchy_info=cfg.get("keep_hierarchy_info", True),
+        )
+    if seg_mode == "custom":
+        return split_parent_child(
+            text, kb_id=kb_id, document_id=document_id,
+            parent_size=cfg.get("max_chunk_len", 1600),
+            child_size=int(cfg.get("max_chunk_len", 1600) * 0.35),
+            overlap=int(cfg.get("max_chunk_len", 1600) * cfg.get("overlap_pct", 10) / 100),
+        )
+    return split_parent_child(text, kb_id=kb_id, document_id=document_id)
+
+
+def _preview_payload(chunks: list[dict]) -> dict:
+    return {
+        "chunks_count": len(chunks),
+        "preview_items": [
+            {"chunk_index": idx, "text": chunk.get("text", ""), "hierarchy_path": chunk.get("section", "")}
+            for idx, chunk in enumerate(chunks)
+        ],
+    }
 
 
 @router.get("")
@@ -81,6 +118,7 @@ def upload_document(kb_id: int, request: KnowledgeDocumentCreateRequest, members
             filename=request.filename, title=request.title, text=request.text,
             content=request.content, content_type=request.content_type,
             content_base64=request.content_base64, source_type=request.source_type,
+            segment_config=request.segment_config,
         )
     except KnowledgeDocumentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -156,15 +194,20 @@ def preview_document_chunks(kb_id: int, document_id: int, request: ResegmentRequ
     document = db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id, KnowledgeDocument.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    cfg = request.model_dump()
-    seg_mode = cfg.get("segment_mode", "auto")
-    if seg_mode == "hierarchy":
-        chunks = split_by_hierarchy(document.text, kb_id=kb.id, document_id=document.id, max_level=cfg.get("hierarchy_level", 3), keep_hierarchy_info=cfg.get("keep_hierarchy_info", True))
-    elif seg_mode == "custom":
-        chunks = split_parent_child(document.text, kb_id=kb.id, document_id=document.id, parent_size=cfg.get("max_chunk_len", 1600), child_size=int(cfg.get("max_chunk_len", 1600) * 0.35), overlap=int(cfg.get("max_chunk_len", 1600) * cfg.get("overlap_pct", 10) / 100))
-    else:
-        chunks = split_parent_child(document.text, kb_id=kb.id, document_id=document.id)
-    return {"chunks_count": len(chunks), "preview_items": [{"chunk_index": idx, "text": chunk.get("text", ""), "hierarchy_path": chunk.get("section", "")} for idx, chunk in enumerate(chunks)]}
+    chunks = _chunks_for_segment(document.text, kb_id=kb.id, document_id=document.id, cfg=request.model_dump())
+    return _preview_payload(chunks)
+
+
+@router.post("/{kb_id}/documents/preview-upload")
+def preview_upload_chunks(kb_id: int, request: PreviewUploadRequest, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
+    """上传前预览：对原始文件提取文本并按策略切片，不落库、不嵌入。"""
+    kb = require_workspace_kb(db, membership.workspace_id, kb_id)
+    try:
+        text = extract_upload_text(filename=request.filename, content_type=request.content_type, content_base64=request.content_base64)
+    except KnowledgeDocumentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    chunks = _chunks_for_segment(text, kb_id=kb.id, document_id=0, cfg=request.model_dump())
+    return _preview_payload(chunks)
 
 
 @router.post("/{kb_id}/documents/{document_id}/resegment")

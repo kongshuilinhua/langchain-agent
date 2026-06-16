@@ -159,6 +159,9 @@ class KnowledgeDocumentCreateRequest(BaseModel):
     content_type: str = Field(default="text/plain", min_length=1, max_length=120)
     content_base64: str | None = Field(default=None, min_length=1)
     source_type: str = Field(default="text", pattern="^(text|file)$")
+    # 首次上传即可指定切片策略（segment_mode/max_chunk_len/overlap_pct/hierarchy_level 等），
+    # 不传则沿用默认（auto 父子滑窗）。
+    segment_config: dict | None = Field(default=None)
 
 
 class SessionUpdateRequest(BaseModel):

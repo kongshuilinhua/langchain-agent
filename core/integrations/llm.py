@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import ssl
 import urllib.error
@@ -28,6 +29,119 @@ class ChatResponse:
     """
     content: str | None = None
     tool_calls: list[dict] | None = None
+
+
+# 🛡️ 兼容垫片：部分模型/网关（典型如 Qwen 系）不会把函数调用放进 OpenAI 标准的
+# 结构化 `tool_calls` 字段，而是以训练时的文本格式直接写进 `content`，导致下游
+# 工作流误把"调用指令"当成最终答案。解析器刻意做得宽容——这些第三方网关吐出的
+# 文本格式既不稳定也常畸形（闭合标签数量对不上、用 <function=arguments> 包参数等），
+# 所以不依赖标签配平，而是「定位函数名 → 在其区间内取参数」，把它们解析回标准
+# tool_calls，恢复"按需调用"语义。
+_TOOLCALL_TAG_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_FUNC_OPEN_RE = re.compile(r"<function\s*=\s*([^>\s]+)\s*>", re.DOTALL)
+_PARAMETER_TAG_RE = re.compile(r"<parameter\s*=\s*([^>\s]+)\s*>(.*?)</parameter>", re.DOTALL)
+# 这些名字是"参数包装标签"而非真正的函数名，需从函数名候选里排除
+_ARG_WRAPPER_NAMES = {"arguments", "parameters", "args", "params"}
+
+
+def _coerce_param_value(raw: str):
+    """参数值优先按 JSON 解析（数组/对象/数字/布尔），失败则保留原始字符串。"""
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
+def _first_json_object(text: str) -> dict | None:
+    """从 text 中提取第一个大括号配平的 JSON 对象（容忍字符串内的花括号/转义）。"""
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_str = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(text[start : i + 1])
+                        return obj if isinstance(obj, dict) else None
+                    except (json.JSONDecodeError, ValueError):
+                        break  # 该 { 不是合法对象，换下一个起点重试
+        start = text.find("{", start + 1)
+    return None
+
+
+def _extract_text_tool_calls(content: str) -> list[dict]:
+    """把 content 里的文本格式函数调用解析为标准 tool_calls 列表（无则返回空）。
+
+    支持的格式：
+    - <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+    - <function=NAME><parameter=PNAME>VALUE</parameter>...</function>          （Hermes 标准）
+    - <function=NAME><function=arguments>{json}</function>                      （畸形变体，闭合标签可能缺失）
+    - <function=NAME> ... {json} ...                                           （裸 JSON 参数兜底）
+    """
+    if not content:
+        return []
+    parsed: list[tuple[str, str]] = []  # (name, arguments_json_str)
+
+    # 格式一：<tool_call>{json}</tool_call>
+    for match in _TOOLCALL_TAG_RE.finditer(content):
+        try:
+            data = json.loads(match.group(1))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        name = str(data.get("name") or "").strip()
+        if not name:
+            continue
+        arguments = data.get("arguments")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments if arguments is not None else {}, ensure_ascii=False)
+        parsed.append((name, arguments))
+
+    # 格式二/三/四：定位真正的函数名标签（排除 arguments 等参数包装标签），
+    # 每个函数体范围为「本标签结束 ~ 下一个函数名标签开始」，在其中提取参数。
+    name_tags = [
+        (m.group(1).strip(), m.end()) for m in _FUNC_OPEN_RE.finditer(content)
+        if m.group(1).strip().lower() not in _ARG_WRAPPER_NAMES
+    ]
+    starts = [m.start() for m in _FUNC_OPEN_RE.finditer(content) if m.group(1).strip().lower() not in _ARG_WRAPPER_NAMES]
+    for index, (name, body_start) in enumerate(name_tags):
+        if not name:
+            continue
+        body_end = starts[index + 1] if index + 1 < len(starts) else len(content)
+        body = content[body_start:body_end]
+        params = {pm.group(1).strip(): _coerce_param_value(pm.group(2)) for pm in _PARAMETER_TAG_RE.finditer(body)}
+        if params:
+            arguments = json.dumps(params, ensure_ascii=False)
+        else:
+            obj = _first_json_object(body)
+            arguments = json.dumps(obj if isinstance(obj, dict) else {}, ensure_ascii=False)
+        parsed.append((name, arguments))
+
+    tool_calls = []
+    for index, (name, arguments) in enumerate(parsed):
+        digest = hashlib.md5(f"{index}:{name}:{arguments}".encode("utf-8")).hexdigest()[:12]
+        tool_calls.append({
+            "id": f"call_{digest}",
+            "type": "function",
+            "function": {"name": name, "arguments": arguments},
+        })
+    return tool_calls
 
 
 class OpenAICompatibleProvider:
@@ -195,7 +309,7 @@ class OpenAICompatibleProvider:
         digest = hashlib.sha256(text.encode("utf-8")).digest()
         return [((digest[i % len(digest)] / 255.0) * 2) - 1 for i in range(32)]
 
-    def embed_batch(self, texts: list[str], *, runtime_config: dict | None = None, batch_size: int = 16) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, runtime_config: dict | None = None, batch_size: int | None = None) -> list[list[float]]:
         """批量文本向量化。OpenAI 兼容 embeddings 接口原生支持 list 输入，分批请求以降低往返次数。"""
         if not texts:
             return []
@@ -207,10 +321,12 @@ class OpenAICompatibleProvider:
         if not api_key:
             raise RuntimeError("Embedding API key is not configured")
         self.last_embed_mock = False
+        # 🛡️ 批量上限默认取配置（DashScope text-embedding-v3 上限 10），避免超限 400
+        effective_batch = max(1, batch_size if batch_size is not None else settings.embedding_batch_size)
         url = self._api_base(settings, runtime_config, purpose="embedding").rstrip("/") + "/embeddings"
         out: list[list[float]] = []
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
+        for start in range(0, len(texts), effective_batch):
+            batch = texts[start : start + effective_batch]
             data = self._post_json(url, {"model": settings.openai_embedding_model, "input": batch}, api_key)
             items = sorted(data["data"], key=lambda item: item.get("index", 0))
             out.extend(item["embedding"] for item in items)
@@ -279,6 +395,11 @@ class OpenAICompatibleProvider:
         message = choice.get("message") or {}
         content = message.get("content")
         raw_tool_calls = message.get("tool_calls") or []
+        # 🛡️ 兼容垫片：网关未把函数调用结构化时，从文本 content 里兜底解析回 tool_calls
+        if not raw_tool_calls and isinstance(content, str) and ("<function" in content or "<tool_call>" in content):
+            text_tool_calls = _extract_text_tool_calls(content)
+            if text_tool_calls:
+                return ChatResponse(content=None, tool_calls=text_tool_calls)
         if raw_tool_calls:
             tool_calls = []
             for tc in raw_tool_calls:

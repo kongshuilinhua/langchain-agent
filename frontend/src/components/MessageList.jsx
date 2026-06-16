@@ -75,13 +75,18 @@ export function MarkdownContent({ content }) {
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
-          code({ inline, className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className || '');
-            const code = String(children || '').replace(/\n$/, '');
-            if (inline) {
-              return <code className={className} {...props}>{children}</code>;
-            }
+          // react-markdown v9 移除了 code 组件的 inline 属性：块级代码会被包进 <pre><code>，
+          // 行内代码只是裸 <code>。因此用 pre 渲染代码块，code 仅负责行内代码，
+          // 避免行内的 `int`、`long long` 等被误渲染成代码块。
+          pre({ children }) {
+            const codeEl = Array.isArray(children) ? children[0] : children;
+            const className = codeEl?.props?.className || '';
+            const match = /language-(\w+)/.exec(className);
+            const code = String(codeEl?.props?.children ?? '').replace(/\n$/, '');
             return <CodeBlock language={match?.[1] || 'text'} code={code} />;
+          },
+          code({ className, children, ...props }) {
+            return <code className={className} {...props}>{children}</code>;
           },
           a({ children, href, ...props }) {
             return <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>;

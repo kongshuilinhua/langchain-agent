@@ -106,14 +106,17 @@ def _fetch_duckduckgo_html(query: str, *, timeout_seconds: int) -> str:
         - 智能字符集校验：解析 Content-Type 自动获取服务器字符集（如 `gbk` / `utf-8`），缺失时安全降级为 `utf-8` 解码，并带 `errors="replace"` 剔除乱码。
     """
     settings = get_settings()
-    url = f"{DUCKDUCKGO_HTML_URL}?{urllib.parse.urlencode({'q': query})}"
+    # DuckDuckGo HTML 端点已不再接受简单 GET（会返回反爬/异常页），必须以表单 POST 提交查询
+    data = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode("utf-8")
     request = urllib.request.Request(
-        url,
+        DUCKDUCKGO_HTML_URL,
+        data=data,
         headers={
             "User-Agent": settings.web_search_user_agent,
             "Accept": "text/html,application/xhtml+xml",
+            "Content-Type": "application/x-www-form-urlencoded",
         },
-        method="GET",
+        method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:

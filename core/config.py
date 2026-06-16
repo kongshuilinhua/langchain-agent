@@ -15,6 +15,13 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from core.ssl_bootstrap import ensure_valid_ssl_cert_file
+
+# 🛡️ 进程启动期自愈：修复 conda 注入但实际缺失的 SSL_CERT_FILE，否则所有 httpx
+# 工具（arxiv/wikipedia/weather/web_search…）会在 client 初始化时整体崩溃。
+# config 模块被几乎所有子系统最早导入，可保证在第一次 httpx 调用前生效。
+ensure_valid_ssl_cert_file()
+
 
 class Settings(BaseSettings):
     """
@@ -63,6 +70,9 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="qwen-plus", alias="OPENAI_MODEL")
     # 🧠 Embedding 模型：text-embedding-v3 是灵积平台最新的高维向量模型
     openai_embedding_model: str = Field(default="text-embedding-v3", alias="OPENAI_EMBEDDING_MODEL")
+    # 🛡️ 嵌入批量上限：DashScope text-embedding-v3 单次最多 10 条，超出会 400 InvalidParameter。
+    # 其它供应商（如 OpenAI 可达 2048）可通过环境变量调大。
+    embedding_batch_size: int = Field(default=10, alias="EMBEDDING_BATCH_SIZE")
     dashscope_api_key: str | None = Field(default=None, alias="DASHSCOPE_API_KEY")
     deepseek_api_base: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_API_BASE")
     deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
@@ -136,7 +146,7 @@ class Settings(BaseSettings):
 
     # ── 文件上传 ────────────────────────────────────────────────
     # 🛡️ 上传大小限制 8MB：防止超大文件拖垮文本提取和向量化流程
-    upload_max_bytes: int = Field(default=8 * 1024 * 1024, alias="UPLOAD_MAX_BYTES")
+    upload_max_bytes: int = Field(default=30 * 1024 * 1024, alias="UPLOAD_MAX_BYTES")
 
     # ── 存储路径 ────────────────────────────────────────────────
     data_dir: Path = Path("data")

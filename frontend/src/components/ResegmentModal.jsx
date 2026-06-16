@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
-import { api } from '../utils.js';
+import { api, fileToBase64 } from '../utils.js';
 
 export function ResegmentModal({
   isOpen,
@@ -10,8 +10,11 @@ export function ResegmentModal({
   token,
   onResegmentSuccess,
   notify,
+  mode = 'resegment',        // 'resegment'（已有文档重切）| 'preupload'（上传前先选策略）
+  onConfirmConfig,           // preupload 模式下，确认时把所选 segment_config 回传给父级去上传
+  previewFile,               // preupload 模式下的原始文件对象，用于上传前预览切片
 }) {
-  const [parserMode, setParserMode] = useState('precise'); // 'precise' | 'fast'
+  const isPreupload = mode === 'preupload';
   const [chunkStrategy, setChunkStrategy] = useState('hierarchy'); // 'auto' | 'custom' | 'hierarchy'
   const [hierarchyLevel, setHierarchyLevel] = useState(3);
   const [keepHierarchyInfo, setKeepHierarchyInfo] = useState(true);
@@ -32,7 +35,6 @@ export function ResegmentModal({
     setPreviewChunks([]);
     try {
       const payload = {
-        parse_mode: parserMode,
         segment_mode: chunkStrategy, // 'auto' | 'custom' | 'hierarchy'
         delimiter: delimiter,
         max_chunk_len: Number(maxChunkLen),
@@ -41,17 +43,34 @@ export function ResegmentModal({
         keep_hierarchy_info: keepHierarchyInfo,
       };
 
-      const data = await api(`/api/knowledge-bases/${kbId}/documents/${doc.id}/preview`, {
-        token,
-        method: 'POST',
-        body: payload,
-      });
+      let data;
+      if (isPreupload) {
+        // 文档还没上传，对原始文件即时预览（后端只提取+切片，不落库不嵌入）
+        if (!previewFile) { notify?.('请先选择文件'); return; }
+        const contentBase64 = await fileToBase64(previewFile);
+        data = await api(`/api/knowledge-bases/${kbId}/documents/preview-upload`, {
+          token,
+          method: 'POST',
+          body: {
+            ...payload,
+            filename: previewFile.name,
+            content_type: previewFile.type || 'application/octet-stream',
+            content_base64: contentBase64,
+          },
+        });
+      } else {
+        data = await api(`/api/knowledge-bases/${kbId}/documents/${doc.id}/preview`, {
+          token,
+          method: 'POST',
+          body: payload,
+        });
+      }
 
       setPreviewChunks(data.preview_items || []);
       notify?.(`生成了 ${data.chunks_count || 0} 个切片预览`);
     } catch (err) {
       console.error(err);
-      notify?.('生成预览失败，请检查配置参数');
+      notify?.(`生成预览失败：${err?.message || '请检查配置参数'}`);
     } finally {
       setPreviewing(false);
     }
@@ -59,18 +78,23 @@ export function ResegmentModal({
 
   // Trigger confirming and saving
   async function handleConfirmSave() {
+    const payload = {
+      segment_mode: chunkStrategy, // 'auto' | 'custom' | 'hierarchy'
+      delimiter: delimiter,
+      max_chunk_len: Number(maxChunkLen),
+      overlap_pct: Number(overlapPct),
+      hierarchy_level: Number(hierarchyLevel),
+      keep_hierarchy_info: keepHierarchyInfo,
+    };
+
+    // preupload：文档还没上传，没有 doc.id 可调 resegment；把策略回传给父级，由其携带 segment_config 上传
+    if (isPreupload) {
+      onConfirmConfig?.(payload);
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const payload = {
-        parse_mode: parserMode,
-        segment_mode: chunkStrategy, // 'auto' | 'custom' | 'hierarchy'
-        delimiter: delimiter,
-        max_chunk_len: Number(maxChunkLen),
-        overlap_pct: Number(overlapPct),
-        hierarchy_level: Number(hierarchyLevel),
-        keep_hierarchy_info: keepHierarchyInfo,
-      };
-
       await api(`/api/knowledge-bases/${kbId}/documents/${doc.id}/resegment`, {
         token,
         method: 'POST',
@@ -101,40 +125,14 @@ export function ResegmentModal({
         </button>
 
         <header className="resegment-panel-heading">
-          <h3>精准解析与层级调参</h3>
+          <h3>文档切片与层级调参</h3>
           <p>
             文档名称: <strong>{doc.title || doc.filename}</strong>
           </p>
         </header>
 
         <div className="resegment-panel-body">
-          {/* Section 1: Parsing accuracy */}
-          <div className="config-group">
-            <label className="config-group-label">解析精度 (Parsing Accuracy)</label>
-            <div className="segmented-switch">
-              <button
-                type="button"
-                className={parserMode === 'precise' ? 'active' : ''}
-                onClick={() => setParserMode('precise')}
-              >
-                精准解析
-              </button>
-              <button
-                type="button"
-                className={parserMode === 'fast' ? 'active' : ''}
-                onClick={() => setParserMode('fast')}
-              >
-                快速解析
-              </button>
-            </div>
-            <p className="config-help-text">
-              {parserMode === 'precise'
-                ? '使用高级文档排版解析器，支持深度抓取复杂的 PDF/Word 表格与标题层级。'
-                : '使用经典的高速流式解析器，适用于简单、纯文本的超大型资料包。'}
-            </p>
-          </div>
-
-          {/* Section 2: Segment Strategy */}
+          {/* Section: Segment Strategy */}
           <div className="config-group">
             <label className="config-group-label">分段策略 (Chunking Strategy)</label>
             <div className="strategy-cards-grid">
@@ -245,7 +243,7 @@ export function ResegmentModal({
             </div>
           )}
 
-          {/* Section 3: Action & Real-time Preview Area */}
+          {/* Section 3: Action & Real-time Preview Area（preupload 模式对原始文件即时预览，resegment 模式对已存文档预览） */}
           <div className="resegment-actions">
             <button
               className="btn-preview-chunks"
@@ -300,7 +298,7 @@ export function ResegmentModal({
             disabled={submitting}
             onClick={handleConfirmSave}
           >
-            {submitting ? '同步提交并构建向量中...' : '💾 确认并保存索引'}
+            {submitting ? '同步提交并构建向量中...' : (isPreupload ? '✅ 确认并上传索引' : '💾 确认并保存索引')}
           </button>
         </footer>
       </section>

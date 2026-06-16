@@ -89,6 +89,7 @@ function KnowledgeHome({
   const [activeKbId, setActiveKbId] = useState(null); // number
   const [activeDoc, setActiveDoc] = useState(null); // object
   const [resegmentOpen, setResegmentOpen] = useState(false); // boolean
+  const [pendingUploadFile, setPendingUploadFile] = useState(null); // 待上传文件（先选切片策略再上传）
 
   // Synchronize state when entering detail view
   function handleSelectKb(kbId) {
@@ -152,6 +153,7 @@ function KnowledgeHome({
           updateKnowledgeBase={updateKnowledgeBase}
           uploadDocument={uploadDocument}
           uploadKnowledgeFile={uploadKnowledgeFile}
+          onPickUploadFile={setPendingUploadFile}
           uploadingKnowledgeFile={uploadingKnowledgeFile}
           uploadingFileName={uploadingFileName}
           docForm={docForm}
@@ -160,6 +162,7 @@ function KnowledgeHome({
           activeDoc={activeDoc}
           setActiveDoc={setActiveDoc}
           setResegmentOpen={setResegmentOpen}
+          notify={notify}
           token={token}
         />
       )}
@@ -186,6 +189,24 @@ function KnowledgeHome({
             if (activeKbId && loadDocuments) {
               await loadDocuments(activeKbId);
             }
+          }}
+          notify={notify}
+        />
+      )}
+
+      {pendingUploadFile && (
+        <ResegmentModal
+          isOpen
+          mode="preupload"
+          kbId={activeKbId}
+          doc={{ filename: pendingUploadFile.name, title: pendingUploadFile.name }}
+          previewFile={pendingUploadFile}
+          token={token}
+          onClose={() => setPendingUploadFile(null)}
+          onConfirmConfig={async (segmentConfig) => {
+            const file = pendingUploadFile;
+            setPendingUploadFile(null);
+            await uploadKnowledgeFile(file, segmentConfig);
           }}
           notify={notify}
         />
@@ -1185,19 +1206,33 @@ function App() {
   }
 
   async function saveAgent() {
-    if (!activeAgentId) return;
+    if (!activeAgentId) return true;
     const body = agentPayload(agentForm, { model: selectedDraftModel });
-    await api(`/api/agents/${activeAgentId}`, { token, method: 'PATCH', body });
-    await bootstrap();
-    await loadAgent(activeAgentId);
+    try {
+      await api(`/api/agents/${activeAgentId}`, { token, method: 'PATCH', body });
+      // 与预览前自动保存共用同一签名基线，手动保存后预览不再重复 PATCH
+      lastDraftSaveSigRef.current = JSON.stringify(body);
+      await bootstrap();
+      await loadAgent(activeAgentId);
+      return true;
+    } catch (err) {
+      // 之前保存失败是静默的（按钮无 catch），导致「改了以为存了」。必须用 toast 暴露。
+      notify(`保存失败：${errorMessage(err)}`);
+      return false;
+    }
   }
 
   async function publishAgent() {
     if (!activeAgentId) return;
-    await saveAgent();
-    const data = await api(`/api/agents/${activeAgentId}/publish`, { token, method: 'POST' });
-    notify(data.review_required ? '已提交管理员审核，通过后会出现在市场。' : '已发布到市场。');
-    await bootstrap();
+    const saved = await saveAgent();
+    if (!saved) return; // 保存失败已提示，不继续发布
+    try {
+      const data = await api(`/api/agents/${activeAgentId}/publish`, { token, method: 'POST' });
+      notify(data.review_required ? '已提交管理员审核，通过后会出现在市场。' : '已发布到市场。');
+      await bootstrap();
+    } catch (err) {
+      notify(`发布失败：${errorMessage(err)}`);
+    }
   }
 
   async function copyMarketAgent(agentId) {
@@ -1250,32 +1285,37 @@ function App() {
   async function uploadDocument() {
     const kbId = Number(docForm.kb_id || knowledgeBases[0]?.id);
     if (!kbId) {
-      setError('请先创建知识库。');
+      notify('请先创建知识库。');
       return;
     }
     const filename = String(docForm.filename || 'guide.txt').trim();
     const text = String(docForm.text || '').trim();
     if (!text) {
-      setError('请先粘贴要写入知识库的文本。');
+      notify('请先粘贴要写入知识库的文本。');
       return;
     }
-    await api(`/api/knowledge-bases/${kbId}/documents`, {
-      token,
-      method: 'POST',
-      body: {
-        title: filename,
-        filename,
-        content: text,
-        content_type: 'text/plain',
-        source_type: 'text',
-      },
-    });
-    setDocForm({ filename: 'guide.txt', text: '', kb_id: String(kbId) });
-    await loadDocuments(kbId);
-    await bootstrap();
+    try {
+      await api(`/api/knowledge-bases/${kbId}/documents`, {
+        token,
+        method: 'POST',
+        body: {
+          title: filename,
+          filename,
+          content: text,
+          content_type: 'text/plain',
+          source_type: 'text',
+        },
+      });
+      setDocForm({ filename: 'guide.txt', text: '', kb_id: String(kbId) });
+      await loadDocuments(kbId);
+      await bootstrap();
+    } catch (err) {
+      notify(`写入知识库失败：${errorMessage(err)}`);
+      throw err;
+    }
   }
 
-  async function uploadKnowledgeFile(file) {
+  async function uploadKnowledgeFile(file, segmentConfig = null) {
     if (!file || !token) return;
     const kbId = Number(docForm.kb_id || knowledgeBases[0]?.id);
     if (!kbId) {
@@ -1298,12 +1338,15 @@ function App() {
           content_type: contentType,
           content_base64: contentBase64,
           source_type: 'file',
+          ...(segmentConfig ? { segment_config: segmentConfig } : {}),
         },
       });
       setDocForm((form) => ({ ...form, filename: file.name, text: '', kb_id: String(kbId) }));
       await loadDocuments(kbId);
       await bootstrap();
     } catch (err) {
+      // 知识库页面不渲染聊天的 error 状态，失败必须用全局 toast 暴露，否则表现为「没反应」
+      notify(`上传失败：${errorMessage(err)}`);
       setError(errorMessage(err));
     } finally {
       setUploadingKnowledgeFile(false);
@@ -1321,9 +1364,13 @@ function App() {
       confirmLabel: '删除文档',
     });
     if (!confirmed) return;
-    await api(`/api/knowledge-bases/${activeKbId}/documents/${documentId}`, { token, method: 'DELETE' });
-    await loadDocuments(activeKbId);
-    await bootstrap();
+    try {
+      await api(`/api/knowledge-bases/${activeKbId}/documents/${documentId}`, { token, method: 'DELETE' });
+      await loadDocuments(activeKbId);
+      await bootstrap();
+    } catch (err) {
+      notify(`删除文档失败：${errorMessage(err)}`);
+    }
   }
 
   async function deleteKnowledgeBase(kb) {
@@ -1335,12 +1382,16 @@ function App() {
       confirmLabel: '删除知识库',
     });
     if (!confirmed) return;
-    await api(`/api/knowledge-bases/${kb.id}`, { token, method: 'DELETE' });
-    if (String(activeKbId) === String(kb.id)) {
-      setDocuments([]);
+    try {
+      await api(`/api/knowledge-bases/${kb.id}`, { token, method: 'DELETE' });
+      if (String(activeKbId) === String(kb.id)) {
+        setDocuments([]);
+      }
+      await bootstrap();
+      notify('知识库已删除。');
+    } catch (err) {
+      notify(`删除知识库失败：${errorMessage(err)}`);
     }
-    await bootstrap();
-    notify('知识库已删除。');
   }
 
   async function deleteAgent(agent) {
@@ -1419,6 +1470,9 @@ function App() {
     viewRef.current = view;
   }, [view]);
 
+  // 草稿预览自动保存的去重签名：记录上次已落库的 payload，避免每条消息都重复 PATCH
+  const lastDraftSaveSigRef = useRef('');
+
   // Clean chat state when switching between draft debugging and published preview
   useEffect(() => {
     setMessages([]);
@@ -1453,6 +1507,22 @@ function App() {
     const effectiveSearchEnabled = webSearchRuntime.available && searchEnabled;
     if (thinkingEnabled && !thinkingCapability.supported) {
       setThinkingEnabled(false);
+    }
+    // 预览前自动保存草稿：草稿调试预览读的是后端 DB 状态，而非本地未保存的 agentForm。
+    // 若不先落库，刚加的工具/知识库/配置不会在预览里生效（典型坑：加了工具却"搜不到"）。
+    // 仅在「编排页 + 草稿模式 + 可编辑 + 确有改动」时触发，用签名去重避免每条消息重复 PATCH。
+    if (viewRef.current === 'builder' && chatModeRef.current === 'draft' && canEditActive && activeAgentId) {
+      const draftPayload = agentPayload(agentForm, { model: selectedDraftModel });
+      const sig = JSON.stringify(draftPayload);
+      if (sig !== lastDraftSaveSigRef.current) {
+        try {
+          await api(`/api/agents/${activeAgentId}`, { token, method: 'PATCH', body: draftPayload });
+          lastDraftSaveSigRef.current = sig;
+        } catch (err) {
+          setError(errorMessage(err));
+          return;
+        }
+      }
     }
     setDraft('');
     setHomePrompt('');
@@ -2647,6 +2717,7 @@ function KnowledgeWorkspace({
   updateKnowledgeBase,
   uploadDocument,
   uploadKnowledgeFile,
+  onPickUploadFile,
   uploadingKnowledgeFile,
   uploadingFileName,
   docForm,
@@ -2655,6 +2726,7 @@ function KnowledgeWorkspace({
   activeDoc,
   setActiveDoc,
   setResegmentOpen,
+  notify,
   token,
 }) {
   const [docSearchQuery, setDocSearchQuery] = useState('');
@@ -2677,6 +2749,7 @@ function KnowledgeWorkspace({
       setEditDialogOpen(false);
     } catch (err) {
       console.error(err);
+      notify?.(`保存失败：${errorMessage(err)}`);
     } finally {
       setSavingEdit(false);
     }
@@ -2714,7 +2787,10 @@ function KnowledgeWorkspace({
         }
       } catch (err) {
         console.error(err);
-        if (active) setChunks([]);
+        if (active) {
+          setChunks([]);
+          notify?.(`加载分块失败：${errorMessage(err)}`);
+        }
       } finally {
         if (active) setChunksLoading(false);
       }
@@ -2774,6 +2850,7 @@ function KnowledgeWorkspace({
       }
     } catch (err) {
       console.error(err);
+      notify?.(`写入知识库失败：${errorMessage(err)}`);
     } finally {
       setPasteSubmitting(false);
     }
@@ -2853,7 +2930,8 @@ function KnowledgeWorkspace({
               if (setDocForm) {
                 setDocForm((form) => ({ ...form, kb_id: String(kb.id) }));
               }
-              handleKnowledgeFileInput(event, uploadKnowledgeFile);
+              // 先弹切片策略弹窗，确认后再真正上传（onPickUploadFile 暂存文件）
+              handleKnowledgeFileInput(event, onPickUploadFile || uploadKnowledgeFile);
             }}
           />
         </div>

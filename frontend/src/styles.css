@@ -4413,12 +4413,14 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.65; /* 常驻可见，不再 hover 整行才出现 */
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
 .workspace-doc-row:hover .btn-delete-doc {
   opacity: 1;
+  color: #64748b;
 }
 
 .btn-delete-doc:hover {

@@ -79,6 +79,7 @@ def add_document(
     content_base64: str | None = None,
     title: str | None = None,
     runtime_config: dict | None = None,
+    segment_config: dict | None = None,
 ) -> KnowledgeDocument:
     source_type = source_type or "text"
     filename = _safe_filename(filename or title or "document.txt")
@@ -116,6 +117,7 @@ def add_document(
         chunk_count=0,
         error_message="",
         status="uploaded",
+        segment_config=segment_config or None,
     )
     db.add(document)
     db.flush()
@@ -560,6 +562,22 @@ def split_by_hierarchy(
             })
 
     return chunks
+
+
+def extract_upload_text(*, filename: str, content_type: str, content_base64: str) -> str:
+    """从上传的原始文件（base64）提取纯文本，不落库、不嵌入。供「上传前预览切片」复用。
+
+    复用 `_prepare_document_payload` 的全部校验（类型/大小/解析）。失败抛 KnowledgeDocumentError。
+    """
+    text, _, _ = _prepare_document_payload(
+        filename=filename,
+        text=None,
+        content=None,
+        content_type=content_type,
+        source_type="file",
+        content_base64=content_base64,
+    )
+    return text
 
 
 def _prepare_document_payload(

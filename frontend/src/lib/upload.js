@@ -4,6 +4,7 @@
  */
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const MAX_KNOWLEDGE_BYTES = 30 * 1024 * 1024; // 知识库文档单独上限（文献类 PDF 较大），与后端 upload_max_bytes 保持一致
 const KNOWLEDGE_FILE_ACCEPT = '.txt,.md,.markdown,.csv,.pdf,.docx';
 const KNOWLEDGE_FILE_EXTENSIONS = ['txt', 'md', 'markdown', 'csv', 'pdf', 'docx'];
 
@@ -27,7 +28,7 @@ function uploadTypeFromContentType(contentType = '') {
 }
 
 function validateKnowledgeFile(file) {
-  if (file.size > MAX_UPLOAD_BYTES) throw new Error('知识库文件不能超过 8MB');
+  if (file.size > MAX_KNOWLEDGE_BYTES) throw new Error('知识库文件不能超过 30MB');
   const suffix = String(file.name || '').toLowerCase().split('.').pop();
   if (!KNOWLEDGE_FILE_EXTENSIONS.includes(suffix)) throw new Error('知识库仅支持 TXT、MD、CSV、PDF、DOCX');
 }
@@ -76,6 +77,7 @@ async function handleKnowledgeFileInput(event, uploadKnowledgeFile) {
 
 export {
   MAX_UPLOAD_BYTES,
+  MAX_KNOWLEDGE_BYTES,
   KNOWLEDGE_FILE_ACCEPT,
   KNOWLEDGE_FILE_EXTENSIONS,
   fileToBase64,
