@@ -4428,6 +4428,32 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
   color: #ef4444;
 }
 
+.btn-reindex-doc {
+  background: transparent;
+  border: 0;
+  color: #94a3b8;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.65;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.workspace-doc-row:hover .btn-reindex-doc {
+  opacity: 1;
+  color: #64748b;
+}
+
+.btn-reindex-doc:hover {
+  background: #dbeafe;
+  color: #3b82f6;
+}
+
 .empty-workspace-docs {
   padding: 30px;
   text-align: center;

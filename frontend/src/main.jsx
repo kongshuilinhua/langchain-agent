@@ -32,6 +32,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   Plus,
+  RefreshCw,
   Rocket,
   Search,
   Send,
@@ -758,6 +759,18 @@ function App() {
       setDocuments([]);
     }
   }, [activeKbId, token]);
+
+  // 文档入库已后台异步化：只要列表里还有 indexing 状态的文档，就每 3s 轮询刷新，
+  // 直到全部转为 indexed/failed 后自动停止（effect 在 documents 更新后重新求值，无 indexing 即不再设定时器）。
+  useEffect(() => {
+    if (!activeKbId || !token) return undefined;
+    const hasIndexing = documents.some((doc) => doc.status === 'indexing');
+    if (!hasIndexing) return undefined;
+    const timer = setInterval(() => {
+      loadDocuments(activeKbId).catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [documents, activeKbId, token]);
 
   useEffect(() => {
     refreshRuntimeStatus().catch(() => {});
@@ -2986,6 +2999,21 @@ function KnowledgeWorkspace({
                   <span className={`document-status ${status}`}>
                     {status === 'indexed' ? '已索引' : status === 'indexing' ? '索引中' : '失败'}
                   </span>
+                  {(status === 'failed' || status === 'indexed') && (
+                    <button
+                      className="btn-reindex-doc"
+                      type="button"
+                      title={status === 'failed' ? '重新索引' : '重建索引'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        api(`/api/knowledge-bases/${activeKbId}/documents/${doc.id}/reindex`, { token, method: 'POST' })
+                          .then(() => loadDocuments(activeKbId))
+                          .catch(() => {});
+                      }}
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                  )}
                   <button
                     className="btn-delete-doc"
                     type="button"

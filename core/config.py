@@ -132,6 +132,9 @@ class Settings(BaseSettings):
     rag_cache_ttl_seconds: int = Field(default=3600, alias="RAG_CACHE_TTL_SECONDS")
     # 🛡️ 无证据时拒绝回答：防止 LLM 在知识库无相关内容时产生幻觉
     rag_refuse_when_no_evidence: bool = Field(default=True, alias="RAG_REFUSE_WHEN_NO_EVIDENCE")
+    # 🎯 父块扩展（small-to-big 检索）：用 child 小块精准命中、排序，最终喂给 LLM 时换成对应父块全文。
+    # 检索精度与上下文完整性兼得；无父块（旧数据/非层级切分）自动回退到 child 全文。
+    rag_parent_expansion: bool = Field(default=True, alias="RAG_PARENT_EXPANSION")
 
     # ── Web 搜索 ────────────────────────────────────────────────
     web_search_enabled: bool = Field(default=True, alias="WEB_SEARCH_ENABLED")
@@ -147,6 +150,14 @@ class Settings(BaseSettings):
     # ── 文件上传 ────────────────────────────────────────────────
     # 🛡️ 上传大小限制 8MB：防止超大文件拖垮文本提取和向量化流程
     upload_max_bytes: int = Field(default=30 * 1024 * 1024, alias="UPLOAD_MAX_BYTES")
+
+    # ── 会话记忆摘要 ──────────────────────────────────────────
+    # 🎯 对照 ragent MemoryProperties：summaryEnabled / summaryMaxChars / historyKeepTurns
+    memory_summary_enabled: bool = Field(default=True, alias="MEMORY_SUMMARY_ENABLED")
+    # 🧠 摘要最大字符数：过长会突破模型上下文；800 字符可覆盖 3-5 轮对话的关键信息
+    memory_summary_max_chars: int = Field(default=800, alias="MEMORY_SUMMARY_MAX_CHARS")
+    # 🧠 压缩后保留的最近轮数：对照 ragent historyKeepTurns
+    memory_keep_recent_turns: int = Field(default=3, alias="MEMORY_KEEP_RECENT_TURNS")
 
     # ── 存储路径 ────────────────────────────────────────────────
     data_dir: Path = Path("data")

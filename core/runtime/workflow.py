@@ -20,11 +20,13 @@ from core.db.models import (
     UserModelConfig,
     Upload,
 )
+from core.config import get_settings
 from core.integrations.llm import OpenAICompatibleProvider
 from core.services.agents import get_agent_detail, normalize_memory, normalize_rag, normalize_tool_policy, normalize_query_understanding
 from core.services import query_understanding as qu_service
 from core.services.rag import retrieve
 from core.services.memory import format_profile_memory, get_memory_profile, memory_used_event
+from core.services.memory_summary import build_memory_payload, summarize_turns
 from core.services.models import resolve_agent_model
 from core.services.tools import execute_tool, tool_call_event, tool_schema_for_llm
 from core.services.uploads import get_workspace_uploads
@@ -184,11 +186,12 @@ class WorkflowRunner:
                 user_message,
                 final_answer,
                 int(runtime.settings.get("memory", {}).get("max_messages", 12)),
+                runtime_config=runtime.runtime_config,
             )
         run.status = "succeeded"
         run.completed_at = datetime.now(timezone.utc)
         self.db.commit()
-        return run, final_answer, [*context.get("sources", []), *context.get("web_sources", [])], steps
+        return run, final_answer, self._public_sources(context), steps
 
     def run_events(
         self,
@@ -256,6 +259,7 @@ class WorkflowRunner:
                 user_message,
                 final_answer,
                 int(runtime.settings.get("memory", {}).get("max_messages", 12)),
+                runtime_config=runtime.runtime_config,
             )
         run.status = "succeeded"
         run.completed_at = datetime.now(timezone.utc)
@@ -264,7 +268,7 @@ class WorkflowRunner:
             "event": "complete",
             "run": run,
             "answer": final_answer,
-            "sources": [*context.get("sources", []), *context.get("web_sources", [])],
+            "sources": self._public_sources(context),
             "steps": steps,
         }
 
@@ -574,7 +578,7 @@ class WorkflowRunner:
               为此，我们实施了全局安全防爆屏障：对拼装完成的整个 `system_content` 实施强力长度限制：`max_system_chars = 100_000`（约等于 5 万个 Token）。
               一旦溢出，强行在边缘做物理截断并补齐 `[上下文已截断以避免超出模型上下文窗口限制]`。
         """
-        source_text = "\n".join(f"- {item['title']}: {item['snippet']}" for item in context.get("sources", []))
+        source_text = self._knowledge_source_text(context.get("sources", []))
         web_source_text = self._web_source_text(context.get("web_sources", []))
         tool_text = "\n".join(f"- {item['tool']}: {item['content']}" for item in context.get("tool_outputs", []))
         variable_text = "\n".join(f"- {key}: {value}" for key, value in context.get("variables", {}).items())
@@ -587,13 +591,20 @@ class WorkflowRunner:
         raw_summary = context.get('memory_summary') or ''
         formatted_summary = "无"
         if raw_summary.strip():
-            try:
-                turns = json.loads(raw_summary)
-                if isinstance(turns, list):
-                    formatted_summary = "\n".join(f"用户：{t['user']}\n助手：{t['assistant']}" for t in turns)
-                else:
-                    formatted_summary = raw_summary
-            except Exception:
+            # B1 兼容渲染：新 dict {summary,turns} / 旧 list / 旧文本统一走 parse_memory
+            summary_text, turns = parse_memory(raw_summary)
+            if summary_text or turns:
+                parts = []
+                if summary_text:
+                    parts.append(f"摘要：{summary_text}")
+                if turns:
+                    parts.append("最近对话：")
+                    parts.append("\n".join(
+                        f"用户：{t.get('user', '')}\n助手：{t.get('assistant', '')}" for t in turns
+                    ))
+                formatted_summary = "\n".join(parts)
+            else:
+                # parse_memory 无法解析时保留原始文本（纯文本等非结构化记忆）
                 formatted_summary = raw_summary
                 
         rewritten = context.get("rewritten_query")
@@ -861,6 +872,41 @@ class WorkflowRunner:
     def _search_status_event(self, status: dict) -> dict:
         return {key: value for key, value in status.items() if key != "sources"}
 
+    def _public_sources(self, context: dict) -> list[dict]:
+        """
+        汇集对外（SSE 回传 + 落库 message.sources）的引用列表。
+
+        🎯 剥离内部字段 `content`（父块扩展后的全文，仅用于本轮拼 prompt）：
+            前端引用展示与历史记录只用 `snippet`，把父块全文存进每条消息纯属冗余膨胀。
+            浅拷贝输出，避免污染 retrieve 的（可能被缓存复用的）原始 source 字典。
+        """
+        public = []
+        for item in [*context.get("sources", []), *context.get("web_sources", [])]:
+            if "content" in item:
+                item = {k: v for k, v in item.items() if k != "content"}
+            public.append(item)
+        return public
+
+    def _knowledge_source_text(self, sources: list[dict]) -> str:
+        """
+        拼装喂给 LLM 的知识片段正文。
+
+        🎯 优先用父块扩展后的 `content`（更完整上下文），缺失时回退到 `snippet`（child 截断）。
+        🛡️ 父块去重：多个 child 命中同一父块时，父块全文只注入一次，避免重复内容挤占上下文窗口。
+            sources 列表本身不动（前端引用仍逐条展示）。
+        """
+        seen_parents: set = set()
+        lines = []
+        for item in sources:
+            body = item.get("content") or item.get("snippet") or ""
+            parent_key = item.get("parent_id")
+            if parent_key and item.get("content"):
+                if parent_key in seen_parents:
+                    continue
+                seen_parents.add(parent_key)
+            lines.append(f"- {item['title']}: {body}")
+        return "\n".join(lines)
+
     def _web_source_text(self, sources: list[dict]) -> str:
         lines = []
         for index, item in enumerate(sources, start=1):
@@ -941,78 +987,62 @@ class WorkflowRunner:
 
     @staticmethod
     def _history_turns(memory_summary: str) -> list[dict]:
-        """把 session memory 的 JSON 轮次解析成 [{user, assistant}]，失败则空。"""
+        """把 session memory 解析成 [{user, assistant}] 轮次列表（兼容三种格式），失败则空。"""
         if not memory_summary.strip():
             return []
-        try:
-            turns = json.loads(memory_summary)
-            return turns if isinstance(turns, list) else []
-        except Exception:
-            return []
+        _, turns = parse_memory(memory_summary)
+        return turns
 
     def _session_memory(self, session_id: int) -> SessionMemory | None:
         return self.db.query(SessionMemory).filter(SessionMemory.session_id == session_id).first()
 
-    def _update_session_memory(self, session_id: int, user_message: str, answer: str, max_messages: int) -> None:
+    def _update_session_memory(self, session_id: int, user_message: str, answer: str,
+                               max_messages: int, runtime_config: dict | None = None) -> None:
         """
-        高可用、可截断、智能向后兼容的历史会话记忆归集器。
+        高可用、可截断、智能向后兼容的历史会话记忆归集器（B1：窗口 + LLM 增量摘要）。
 
         🎯 意图与工程大局观：
             记忆的膨胀是导致 Agent 随着对话轮次加深逐渐失去精度（或发生高额费用）的罪魁祸首。
-            本方法实现一个窗口可调节的滑动记忆队列：
-            - `max_messages` 规定最大保存的历史消息轮数。
-            - 每一个 Turn (包含 User + Assistant 一轮) 被序列化为 JSON List 扁平格式。
-            
+            照搬 ragent 的 `最近窗口 + 旧轮次 LLM 增量摘要` 方案（对应
+            `DefaultConversationMemoryService.append` + `SummaryService.compressIfNeeded`）：
+            - 未超 `max_turns` 时，等价于现有滑动窗口，仅扁平存最近轮次。
+            - 超阈值时，把较旧轮次交 `summarize_turns` 压成增量摘要，仅保留最近 `keep_recent` 轮原文，
+              产出结构化载荷 `{"summary": ..., "turns": [...]}` 落库。
+
         🛡️ 防御性编程与大模型兜底：
-            - **向前兼容性设计**：若旧版本中 `SessionMemory.summary` 以非标准纯文本（例如 `===` 符号物理分隔）形式存储，
-              系统内部设有高防崩解析机制（Try-Catch），一旦解析 JSON 崩塌，自动正则向后匹配旧版文本并清洗转存为 JSON 格式。
-            - **助手大段文本/代码截断保护（防雪崩红线）**：
-              当大模型之前的回答中包含几千字的长串代码或超长日志时，如果原样存入 Memory，
-              下一轮交互时会立刻导致 Context 被废话塞爆。
-              为杜绝此工程痛点，如果最终转出的 JSON 字节长度超限（>2000 字节），
-              系统强制对 truncated_turns 中的 `assistant` 纯文本实施限幅（仅保留前 500 字符），
-              在末尾附以裁切标记 `...(此回答过长已截断)...`，从底层逻辑上斩断了“大回答塞死后续对话”的恶性循环！
+            - **向后兼容**：`build_memory_payload` 经 `parse_memory` 兼容解析新 dict / 旧 JSON list /
+              旧 `\n===\n` 文本三种历史格式，绝不因存量会话格式差异而丢失记忆。
+            - **摘要降级红线**：摘要 LLM 调用任何异常都降级保留旧摘要（绝不抛、绝不丢），主对话不受影响。
+            - **大响应截断保护**：序列化超 2000 字节时对 assistant 文本限幅 500 字，斩断「大回答塞死后续对话」。
         """
+        settings = get_settings()
         memory = self._session_memory(session_id)
         if not memory:
             memory = SessionMemory(session_id=session_id, summary="", message_count=0)
             self.db.add(memory)
         memory.message_count += 2
-        
-        # 尝试标准 JSON 反序列化解析对话队列
-        try:
-            dialogue_turns = json.loads(memory.summary) if memory.summary else []
-            if not isinstance(dialogue_turns, list):
-                dialogue_turns = []
-        except Exception:
-            # 🛡️ 兼容性兜底解析旧版纯文本
-            dialogue_turns = []
-            if memory.summary.strip():
-                raw_turns = memory.summary.split("\n===\n")
-                for turn_text in raw_turns:
-                    if "助手：" in turn_text:
-                        parts = turn_text.split("助手：", 1)
-                        u_part = parts[0].replace("用户：", "").strip()
-                        a_part = parts[1].strip()
-                        dialogue_turns.append({"user": u_part, "assistant": a_part})
 
-        # 并入当前轮次的数据
-        dialogue_turns.append({
-            "user": user_message.strip(),
-            "assistant": answer.strip()
-        })
-        
-        # max_messages 表示单句条数，换算成 Turn 轮数
+        # max_messages = message count, convert to turn count
         max_turns = max(1, max_messages // 2)
-        truncated_turns = dialogue_turns[-max_turns:]
-        
-        # 预序列化检验字节尺寸
-        serialized = json.dumps(truncated_turns, ensure_ascii=False)
-        # 🛡️ 大响应截断保护：如果 JSON 字节大小超限，削减助手文本，防止塞爆上下文
-        if len(serialized) > 2000:
-            for turn in truncated_turns:
-                if len(turn["assistant"]) > 500:
-                    turn["assistant"] = turn["assistant"][:500] + "...(此回答过长已截断)..."
-            serialized = json.dumps(truncated_turns, ensure_ascii=False)
-            
-        memory.summary = serialized
+        keep_recent = settings.memory_keep_recent_turns
+
+        summary_config = {
+            "enabled": settings.memory_summary_enabled,
+            "summary_max_chars": settings.memory_summary_max_chars,
+        }
+
+        provider = self.provider
+        payload = build_memory_payload(
+            memory.summary or "",
+            new_turn={"user": user_message.strip(), "assistant": answer.strip()},
+            max_turns=max_turns,
+            keep_recent=keep_recent,
+            summarizer=lambda older, existing: summarize_turns(
+                provider,
+                older_turns=older,
+                existing_summary=existing,
+                config=summary_config,
+                runtime_config=runtime_config,
+            ),
+        )
+        memory.summary = json.dumps(payload, ensure_ascii=False)

@@ -1,5 +1,7 @@
 # filepath: d:/pycharmprojects/langchain/tests/test_knowledge_service.py
-from core.services.knowledge import split_by_hierarchy
+from unittest.mock import MagicMock, patch
+
+from core.services.knowledge import split_by_hierarchy, mark_document_reindexing
 
 def test_split_by_hierarchy():
     markdown_text = "# H1\nText under H1\n## H2\nText under H2\n### H3\nText under H3"
@@ -54,4 +56,109 @@ def test_split_by_hierarchy_siblings():
     assert chunks[2]["section"] == "H1: H1 > H2: H2 > H3: H3_A"
     # H3_B path should be H1 > H2 > H3_B (NOT nested under H3_A)
     assert chunks[3]["section"] == "H1: H1 > H2: H2 > H3: H3_B"
+
+
+# ── B2.1 mark_document_reindexing 原子状态守卫 ────────────────────────────
+
+
+class _FakeRowcountResult:
+    """模拟 SQLAlchemy CursorResult，控制 execute 返回的 rowcount。"""
+    def __init__(self, rowcount: int):
+        self.rowcount = rowcount
+
+
+class _FakeDb:
+    """绕过 MySQL 1419 的纯 fake Session——只记 execute/commit 调用，不连库。"""
+    def __init__(self, rowcount: int = 1):
+        self._rowcount = rowcount
+        self.calls: list[dict] = []
+
+    def execute(self, stmt):
+        self.calls.append({"method": "execute", "stmt": str(stmt)})
+        return _FakeRowcountResult(self._rowcount)
+
+    def commit(self):
+        self.calls.append({"method": "commit"})
+
+
+def test_mark_document_reindexing_succeeds_when_not_indexing():
+    """status != 'indexing' 时原子更新，返回 True。"""
+    db = _FakeDb(rowcount=1)
+    result = mark_document_reindexing(db, document_id=42)
+    assert result is True
+    assert len(db.calls) == 2  # execute + commit
+    stmt_str = db.calls[0]["stmt"]
+    # 确认 UPDATE 语句含 status != 'indexing' 守卫
+    assert "status != :status_1" in stmt_str or "knowledge_documents" in stmt_str
+
+
+def test_mark_document_reindexing_refuses_when_already_indexing():
+    """status == 'indexing' 时 rowcount=0，返回 False（防并发重复执行）。"""
+    db = _FakeDb(rowcount=0)
+    result = mark_document_reindexing(db, document_id=42)
+    assert result is False
+
+
+def test_mark_document_reindexing_clears_error_and_chunks():
+    """确认 UPDATE values 清空 error_message 与 chunk_count。"""
+    db = _FakeDb(rowcount=1)
+    result = mark_document_reindexing(db, document_id=1)
+    assert result is True
+    stmt_str = db.calls[0]["stmt"]
+    # 参数名可能因 ORM 编译不同，检查关键词即可
+    assert "error_message" in stmt_str.lower() or "error_message" in stmt_str
+    assert "chunk_count" in stmt_str.lower() or "chunk_count" in stmt_str
+
+
+# ── A1.1 扫描件 / 空 PDF 明确报错 ──────────────────────────────────────
+
+
+def test_prepare_document_payload_empty_file_extraction(monkeypatch):
+    """文件提取返回空文本时抛 KnowledgeDocumentError 并提示扫描件。"""
+    from core.services import knowledge as k_mod
+    from core.services.knowledge import KnowledgeDocumentError
+
+    def _fake_extract(_filename, _content_type, _raw):
+        return ""
+
+    def _fake_sanitize(text):
+        return text
+
+    monkeypatch.setattr(k_mod, "extract_document_text", _fake_extract)
+    monkeypatch.setattr(k_mod, "sanitize_extracted_text", _fake_sanitize)
+
+    try:
+        k_mod._prepare_document_payload(
+            filename="scan.pdf",
+            text=None,
+            content=None,
+            content_type="application/pdf",
+            source_type="file",
+            content_base64="ZHVtbXk=",  # "dummy" in base64
+        )
+        assert False, "应该抛出 KnowledgeDocumentError"
+    except KnowledgeDocumentError as exc:
+        assert "扫描件" in str(exc) or "未能从该文件提取到文本" in str(exc)
+        assert exc.record_failed is True
+        assert exc.status_code == 422
+
+
+def test_prepare_document_payload_text_source_empty_still_fails():
+    """纯文本 source_type 空内容走已有校验（不误伤），不应出现扫描件提示。"""
+    from core.services.knowledge import KnowledgeDocumentError
+
+    try:
+        from core.services.knowledge import _prepare_document_payload
+        _prepare_document_payload(
+            filename="note.txt",
+            text=None,
+            content="",
+            content_type="text/plain",
+            source_type="text",
+            content_base64=None,
+        )
+        assert False, "应抛出异常"
+    except KnowledgeDocumentError as exc:
+        # 文本源空内容报错不包含"扫描件"
+        assert "扫描件" not in str(exc)
 

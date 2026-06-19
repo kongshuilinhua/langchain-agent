@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import logging
 import re
 from pathlib import Path
 from sqlalchemy.orm import Session
@@ -15,6 +16,8 @@ from core.services.rag import retrieve
 from core.services.uploads import DOC_TYPES, extract_document_text, sanitize_extracted_text
 
 
+logger = logging.getLogger(__name__)
+
 SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".pdf", ".docx"}
 SUPPORTED_TEXT_TYPES = {"text/plain", "text/markdown", "application/markdown", "text/csv"}
 SUPPORTED_FILE_TYPES = DOC_TYPES
@@ -25,6 +28,25 @@ class KnowledgeDocumentError(ValueError):
         super().__init__(message)
         self.status_code = status_code
         self.record_failed = record_failed
+
+
+def mark_document_reindexing(db: Session, *, document_id: int) -> bool:
+    """
+    原子守卫：仅当文档不处于 indexing 时置为 indexing。返回是否成功抢到。
+
+    🎯 对照 ragent DocumentStatusHelper.tryMarkRunning：
+        .ne(KnowledgeDocumentDO::getStatus, DocumentStatus.RUNNING.getCode())
+    🛡️ 一条带 WHERE status != 'indexing' 的原子 UPDATE + 检查 rowcount，
+        防止并发重复执行（rabbitmq → BackgroundTasks，无需 Redis 锁）。
+    """
+    from sqlalchemy import update
+    result = db.execute(
+        update(KnowledgeDocument)
+        .where(KnowledgeDocument.id == document_id, KnowledgeDocument.status != "indexing")
+        .values(status="indexing", error_message="", chunk_count=0)
+    )
+    db.commit()
+    return result.rowcount > 0
 
 
 def create_knowledge_base(db: Session, *, workspace_id: int, user_id: int, name: str, description: str = "") -> KnowledgeBase:
@@ -80,6 +102,7 @@ def add_document(
     title: str | None = None,
     runtime_config: dict | None = None,
     segment_config: dict | None = None,
+    defer_indexing: bool = False,
 ) -> KnowledgeDocument:
     source_type = source_type or "text"
     filename = _safe_filename(filename or title or "document.txt")
@@ -116,11 +139,17 @@ def add_document(
         text_preview=_preview(prepared_text),
         chunk_count=0,
         error_message="",
-        status="uploaded",
+        # 异步入库：文本已就绪、重活待后台，先标 indexing（前端显示「索引中」）；同步路径仍标 uploaded。
+        status="indexing" if defer_indexing else "uploaded",
         segment_config=segment_config or None,
     )
     db.add(document)
     db.flush()
+    if defer_indexing:
+        # 仅持久化提取后的文本，分块/向量化/落库交由后台 run_document_ingestion 执行。
+        db.commit()
+        db.refresh(document)
+        return document
     index_document(
         db,
         workspace_id=workspace_id,
@@ -132,6 +161,89 @@ def add_document(
     db.commit()
     db.refresh(document)
     return document
+
+
+def run_document_ingestion(*, document_id: int, workspace_id: int, kb_id: int) -> None:
+    """
+    后台执行单文档入库（分块 + 向量化 + 落库）。
+
+    🎯 由上传接口经 FastAPI BackgroundTasks 调度，把耗时的 embedding/写库移出 HTTP 请求。
+    🛡️ 自开独立 Session（请求 Session 在响应后已关闭）；任何异常自行落库为 failed + 清理半成品，
+        绝不抛出（后台任务无处可抛）。状态机：indexing → indexed / failed。
+    """
+    from core.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        kb = db.get(KnowledgeBase, kb_id)
+        document = db.get(KnowledgeDocument, document_id)
+        if not kb or not document:
+            return
+        try:
+            index_document(db, workspace_id=workspace_id, kb=kb, document=document, clear_existing=True)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            try:
+                vector_store_module.vector_store.delete(
+                    filters={"workspace_id": workspace_id, "knowledge_base_id": kb_id, "document_id": document_id}
+                )
+            except Exception:
+                pass
+            document = db.get(KnowledgeDocument, document_id)
+            if document:
+                db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document_id).delete(synchronize_session=False)
+                db.query(KnowledgeParentChunk).filter(KnowledgeParentChunk.document_id == document_id).delete(synchronize_session=False)
+                document.status = "failed"
+                document.error_message = _sanitize_error(str(exc))
+                document.chunk_count = 0
+                db.commit()
+            logger.exception("Background document ingestion failed: document_id=%s", document_id)
+    finally:
+        db.close()
+
+
+def run_kb_reindex(*, workspace_id: int, kb_id: int, job_id: str) -> None:
+    """后台重建整个知识库索引，并把进度/结果回写 Redis job。自开 Session、吞异常。"""
+    from core.db.session import SessionLocal
+    from core.services.rag_cache import redis_store
+
+    db = SessionLocal()
+    try:
+        kb = db.get(KnowledgeBase, kb_id)
+        if not kb:
+            return
+        try:
+            summary = reindex_knowledge_base(db, workspace_id=workspace_id, kb=kb)
+            status = "failed" if summary["documents_failed"] and not summary["documents_indexed"] else "succeeded"
+            message = (
+                f"Rebuilt {summary['chunks_indexed']} chunks for {summary['documents_indexed']} documents."
+                if status == "succeeded" else "Knowledge base reindex failed for all documents."
+            )
+            redis_store.set_job(job_id, {"job_id": job_id, "knowledge_base_id": kb_id, "status": status, "message": message, **summary})
+        except Exception as exc:
+            db.rollback()
+            redis_store.set_job(job_id, {"job_id": job_id, "knowledge_base_id": kb_id, "status": "failed", "message": _sanitize_error(str(exc))})
+            logger.exception("Background knowledge base reindex failed: kb_id=%s", kb_id)
+    finally:
+        db.close()
+
+
+def recover_interrupted_ingestion(db: Session) -> int:
+    """
+    启动时崩溃恢复：把卡在 indexing 的文档复位为 failed。
+
+    🎯 BackgroundTasks 在进程内运行，进程重启会丢失在途任务，留下永远卡在 indexing 的文档。
+        启动时（无任务在跑）统一复位，允许用户手动重新索引。对应 ragent 的 recoverStuckRunningDocuments。
+    """
+    stuck = db.query(KnowledgeDocument).filter(KnowledgeDocument.status == "indexing").all()
+    for document in stuck:
+        document.status = "failed"
+        document.error_message = "入库被中断（服务重启），请重新索引该文档。"
+        document.chunk_count = 0
+    if stuck:
+        db.commit()
+    return len(stuck)
 
 
 def reindex_knowledge_base(db: Session, *, workspace_id: int, kb: KnowledgeBase) -> dict:
@@ -616,7 +728,10 @@ def _prepare_document_payload(
     except ValueError as exc:
         raise KnowledgeDocumentError("Document text extraction failed", status_code=422, record_failed=True) from exc
     if not extracted.strip():
-        raise KnowledgeDocumentError("Document text extraction failed", status_code=422, record_failed=True)
+        raise KnowledgeDocumentError(
+            "未能从该文件提取到文本，可能是扫描件 / 图片型 PDF。请上传文本版文件，或先自行 OCR 转文字。",
+            status_code=422, record_failed=True,
+        )
     return extracted, normalized_filename, normalized_content_type
 
 

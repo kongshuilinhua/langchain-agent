@@ -96,6 +96,17 @@ def startup() -> None:
     try:
         init_db()
         startup_error = None
+        # 崩溃恢复：复位上次进程退出时卡在 indexing 的文档（后台入库任务随进程丢失）。
+        try:
+            from core.db.session import SessionLocal
+            from core.services.knowledge import recover_interrupted_ingestion
+
+            with SessionLocal() as recovery_session:
+                recovered = recover_interrupted_ingestion(recovery_session)
+            if recovered:
+                logger.warning("Reset %d document(s) stuck in 'indexing' after restart", recovered)
+        except Exception:
+            logger.exception("Failed to recover interrupted ingestion on startup")
     except Exception as exc:
         startup_error = str(exc)[:500]
         logger.exception("Database initialization failed; API started in degraded mode")

@@ -64,6 +64,123 @@ def test_rrf_merges_dense_and_bm25_channels():
     assert fused[0]["retrieval_channel"] == "rrf:bm25+dense"
 
 
+class _FakeParentQuery:
+    """最小化模拟 db.query(...).filter(...).all()，返回预置 (parent_id, text) 行。"""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _FakeParentDB:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def query(self, *args, **kwargs):
+        return _FakeParentQuery(self._rows)
+
+
+def test_expand_parents_overrides_content_with_parent_text():
+    from core.services.rag import _expand_parents
+
+    sources = [
+        {"parent_id": "kb1-doc1-parent0", "snippet": "child A 截断", "content": "child A 全文"},
+        {"parent_id": "kb1-doc1-parent0", "snippet": "child B 截断", "content": "child B 全文"},
+        {"parent_id": "kb1-doc1-parent9", "snippet": "孤儿 child 截断", "content": "孤儿 child 全文"},
+    ]
+    db = _FakeParentDB([("kb1-doc1-parent0", "父块0的完整连续上下文")])
+
+    _expand_parents(db, workspace_id=1, sources=sources)
+
+    # 命中父块的 child：content 被父块全文覆盖，snippet 保持不变（仍用于引用展示与证据校验）
+    assert sources[0]["content"] == "父块0的完整连续上下文"
+    assert sources[0]["snippet"] == "child A 截断"
+    assert sources[1]["content"] == "父块0的完整连续上下文"
+    # 无对应父块行（旧数据/非层级切分）：静默回退到 child 全文
+    assert sources[2]["content"] == "孤儿 child 全文"
+
+
+def test_expand_parents_tolerates_db_failure():
+    from core.services.rag import _expand_parents
+
+    class _BoomDB:
+        def query(self, *args, **kwargs):
+            raise RuntimeError("db down")
+
+    sources = [{"parent_id": "kb1-doc1-parent0", "snippet": "s", "content": "child 全文"}]
+    _expand_parents(_BoomDB(), workspace_id=1, sources=sources)
+    # 父块查询失败绝不拖垮主流程，content 保留 child 全文兜底
+    assert sources[0]["content"] == "child 全文"
+
+
+def test_knowledge_source_text_dedups_parent_and_prefers_content():
+    from core.runtime.workflow import WorkflowRunner
+
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    sources = [
+        {"title": "doc", "parent_id": "p0", "content": "父块0全文", "snippet": "child A"},
+        {"title": "doc", "parent_id": "p0", "content": "父块0全文", "snippet": "child B"},
+        {"title": "doc2", "parent_id": "p1", "content": "", "snippet": "无父块, 用 snippet"},
+    ]
+    text = runner._knowledge_source_text(sources)
+
+    # 同父块只注入一次父块全文；无 content 的回退到 snippet
+    assert text.count("父块0全文") == 1
+    assert "无父块, 用 snippet" in text
+
+
+def test_recover_interrupted_ingestion_resets_stuck_indexing():
+    from core.services.knowledge import recover_interrupted_ingestion
+
+    class _Doc:
+        def __init__(self):
+            self.status = "indexing"
+            self.error_message = ""
+            self.chunk_count = 7
+
+    class _Query:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *a, **k):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class _DB:
+        def __init__(self, rows):
+            self._rows = rows
+            self.committed = False
+
+        def query(self, *a, **k):
+            return _Query(self._rows)
+
+        def commit(self):
+            self.committed = True
+
+    docs = [_Doc(), _Doc()]
+    db = _DB(docs)
+    count = recover_interrupted_ingestion(db)
+
+    assert count == 2
+    assert db.committed is True
+    for doc in docs:
+        assert doc.status == "failed"
+        assert "重启" in doc.error_message
+        assert doc.chunk_count == 0
+
+    # 无卡死文档时不应触发 commit
+    empty_db = _DB([])
+    assert recover_interrupted_ingestion(empty_db) == 0
+    assert empty_db.committed is False
+
+
 def test_chat_rag_options_emit_hybrid_status(client, auth_headers):
     kb = client.post("/api/knowledge-bases", headers=auth_headers, json={"name": "Hybrid KB"})
     kb_id = kb.json()["knowledge_base"]["id"]

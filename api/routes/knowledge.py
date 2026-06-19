@@ -2,7 +2,9 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+import time
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -22,7 +24,9 @@ from core.services.knowledge import (
     index_document,
     knowledge_base_summary,
     list_document_chunks,
-    reindex_knowledge_base,
+    mark_document_reindexing,
+    run_document_ingestion,
+    run_kb_reindex,
     split_by_hierarchy,
     split_parent_child,
 )
@@ -109,30 +113,33 @@ def create_kb(request: KnowledgeBaseCreateRequest, membership: WorkspaceMember =
 
 
 @router.post("/{kb_id}/documents")
-def upload_document(kb_id: int, request: KnowledgeDocumentCreateRequest, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
+def upload_document(kb_id: int, request: KnowledgeDocumentCreateRequest, background_tasks: BackgroundTasks, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
     kb = require_workspace_kb(db, membership.workspace_id, kb_id)
     require_kb_write_access(kb, membership)
     try:
+        # defer_indexing：仅同步完成文本提取与落库，分块/向量化/落库交后台，避免阻塞上传请求。
         document = add_document(
             db, workspace_id=membership.workspace_id, kb=kb,
             filename=request.filename, title=request.title, text=request.text,
             content=request.content, content_type=request.content_type,
             content_base64=request.content_base64, source_type=request.source_type,
             segment_config=request.segment_config,
+            defer_indexing=True,
         )
     except KnowledgeDocumentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        db.rollback()
-        logger.exception("Knowledge document indexing failed")
-        raise HTTPException(status_code=502, detail={"message": str(exc)[:500], "error_code": "knowledge_index_failed"}) from exc
     except Exception as exc:
         db.rollback()
         logger.exception("Knowledge document upload failed")
         raise HTTPException(status_code=500, detail={"message": "Knowledge document upload failed.", "error_code": "knowledge_upload_failed"}) from exc
-    payload = document_payload(document, db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).count())
+    payload = document_payload(document, 0)
+    # 文本提取阶段即失败（坏文件等），直接返回 422，不调度后台入库。
     if document.status == "failed":
         raise HTTPException(status_code=422, detail={"message": document.error_message or "Document text extraction failed", "document": payload})
+    background_tasks.add_task(
+        run_document_ingestion,
+        document_id=document.id, workspace_id=membership.workspace_id, kb_id=kb.id,
+    )
     return {"document": payload}
 
 
@@ -160,22 +167,37 @@ def remove_document(kb_id: int, document_id: int, membership: WorkspaceMember = 
 
 
 @router.post("/{kb_id}/index")
-def index_kb(kb_id: int, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
+def index_kb(kb_id: int, background_tasks: BackgroundTasks, membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
     kb = require_workspace_kb(db, membership.workspace_id, kb_id)
     require_kb_write_access(kb, membership)
-    summary = reindex_knowledge_base(db, workspace_id=membership.workspace_id, kb=kb)
-    status = "failed" if summary["documents_failed"] and not summary["documents_indexed"] else "succeeded"
-    job_id = f"kb-{kb.id}-sync"
-    payload = {
-        "job_id": job_id, "knowledge_base_id": kb.id, "status": status,
-        "message": (
-            f"Rebuilt {summary['chunks_indexed']} chunks for {summary['documents_indexed']} documents."
-            if status == "succeeded" else "Knowledge base reindex failed for all documents."
-        ),
-        **summary,
-    }
+    # 重建整库索引耗时，移交后台；接口立即返回 running job，前端轮询 /knowledge/jobs/{job_id} 获取结果。
+    job_id = f"kb-{kb.id}-{int(time.time())}"
+    payload = {"job_id": job_id, "knowledge_base_id": kb.id, "status": "running", "message": "Knowledge base reindex started."}
     redis_store.set_job(job_id, payload)
+    background_tasks.add_task(
+        run_kb_reindex,
+        workspace_id=membership.workspace_id, kb_id=kb.id, job_id=job_id,
+    )
     return payload
+
+
+@router.post("/{kb_id}/documents/{document_id}/reindex")
+def reindex_document(kb_id: int, document_id: int, background_tasks: BackgroundTasks,
+                     membership: WorkspaceMember = Depends(get_current_membership), db: Session = Depends(get_db)):
+    kb = require_workspace_kb(db, membership.workspace_id, kb_id)
+    require_kb_write_access(kb, membership)
+    document = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.knowledge_base_id == kb.id, KnowledgeDocument.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not (document.text or "").strip():
+        raise HTTPException(status_code=422, detail={"message": "文档无可索引文本，请重新上传文本版。"})
+    if not mark_document_reindexing(db, document_id=document_id):
+        raise HTTPException(status_code=409, detail={"message": "该文档正在索引中，请稍候。"})
+    background_tasks.add_task(run_document_ingestion, document_id=document_id,
+                             workspace_id=membership.workspace_id, kb_id=kb.id)
+    db.refresh(document)
+    return {"document": document_payload(document, 0)}
 
 
 @router.get("/{kb_id}/documents/{document_id}/chunks")

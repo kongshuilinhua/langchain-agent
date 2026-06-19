@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
-from core.db.models import KnowledgeChunk, KnowledgeDocument
+from core.db.models import KnowledgeChunk, KnowledgeDocument, KnowledgeParentChunk
 from core.integrations.llm import OpenAICompatibleProvider
 from core.integrations import vector_store as vector_store_module
 from core.services.rag_cache import redis_store
@@ -121,6 +121,13 @@ def retrieve(
     # 5. 组装输出与有效证据评估
     top_k = int(config.get("top_k") or settings.rag_top_k)
     sources = [_source_payload(hit) for hit in final_hits[:top_k]]
+
+    # 5.5 父块扩展（small-to-big）：child 已用于精准命中+排序，喂给 LLM 的正文换成父块全文。
+    # 🛡️ 容错：父块查询失败/缺失绝不拖垮主流程，content 自动保留 child 全文兜底。
+    parent_expansion = bool(config.get("parent_expansion", settings.rag_parent_expansion))
+    if parent_expansion and sources:
+        _expand_parents(db, workspace_id=workspace_id, sources=sources)
+
     no_evidence = not _has_evidence(sources, query)
     
     status = started_status | {
@@ -366,11 +373,49 @@ def _source_payload(hit: dict) -> dict:
         "page": metadata.get("page"),
         "section": metadata.get("section") or "",
         "snippet": (hit.get("text") or "")[:360],
+        # content：喂给 LLM 的正文。默认 = child 全文（不截断）；父块扩展命中时被父块全文覆盖。
+        "content": hit.get("text") or "",
         "score": float(hit.get("score") or 0),
         "dense_score": float(hit.get("dense_score") or 0),
         "bm25_score": float(hit.get("bm25_score") or 0),
         "retrieval_channel": hit.get("retrieval_channel") or "dense",
     }
+
+
+def _expand_parents(db: Session, *, workspace_id: int, sources: list[dict]) -> None:
+    """
+    父块扩展（small-to-big 检索）：就地把每个 source 的 `content` 替换为其父块全文。
+
+    🎯 意图与工程大局观：
+        child 小块利于向量/BM25 精准命中与排序，但喂给 LLM 时上下文太碎、易割裂语义。
+        本方法在排序定稿后，按 child 的 parent_id 批量回捞 KnowledgeParentChunk 全文，
+        以「更大的连续上下文」替换喂给模型的正文，命中精度与上下文完整性兼得。
+        `snippet`（child 截断）保持不动，继续用于前端引用展示与 _has_evidence 字面证据校验。
+
+    🛡️ 防御性设计：
+        - parent_id 形如 `kb{kb}-doc{doc}-parent{n}`，全局唯一，按 workspace 隔离批量 IN 查询，单次往返。
+        - 任意异常（DB 抖动等）一律吞掉，content 保留 child 全文兜底，绝不拖垮检索主流程。
+        - 旧数据/非层级切分无对应父块行时，对应 source 静默保留 child 全文。
+    """
+    parent_ids = {src.get("parent_id") for src in sources if src.get("parent_id")}
+    if not parent_ids:
+        return
+    try:
+        rows = (
+            db.query(KnowledgeParentChunk.parent_id, KnowledgeParentChunk.text)
+            .filter(
+                KnowledgeParentChunk.workspace_id == workspace_id,
+                KnowledgeParentChunk.parent_id.in_(parent_ids),
+            )
+            .all()
+        )
+    except Exception:
+        return
+    parent_text = {parent_id: text for parent_id, text in rows if text}
+    for src in sources:
+        text = parent_text.get(src.get("parent_id"))
+        if text:
+            src["content"] = text
 
 
 def _row_metadata(row: KnowledgeChunk) -> dict:
