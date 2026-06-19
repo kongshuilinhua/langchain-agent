@@ -99,7 +99,7 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + MySQL，�
 | 层级 | 技术 | 说明 |
 |------|------|------|
 | 后端框架 | FastAPI (Python 3.11) | 异步 API，Uvicorn 服务器 |
-| 前端 | Vite + Vue 3 + TypeScript + Tailwind CSS | 固定端口 `127.0.0.1:5174` |
+| 前端 | Vite + React 18 + JavaScript + CSS | 固定端口 `127.0.0.1:5174` |
 | 数据库 | MySQL 8.0 | SQLAlchemy ORM，20+ 张表 |
 | 向量存储 | Milvus / 内存回退 | `LINGSHU_VECTOR_BACKEND` 切换 |
 | 缓存 | Redis | RAG 缓存 + 索引作业状态 |
@@ -151,8 +151,8 @@ langchain/
 │       ├── uploads.py              #     文件上传管理
 │       ├── web_search.py           #     网络搜索（DuckDuckGo）
 │       └── bootstrap.py            #     首次启动初始化（默认工具/模型/工作空间）
-├── frontend/                       # 前端 Vue 3 项目
-│   └── src/                        #   Vite + Vue 3 + TypeScript + Tailwind
+├── frontend/                       # React 18 前端
+│   └── src/                        #   Vite + JavaScript + CSS
 ├── eval/                           # 评测
 │   ├── rag_cases.jsonl             #   RAG 评测数据集
 │   └── run_rag_eval.py             #   评测运行脚本
@@ -306,7 +306,7 @@ npm run dev   # http://127.0.0.1:5174
 ## 架构
 
 ```
-用户浏览器 (Vue 3)
+用户浏览器 (React 18)
     │  HTTP / SSE
     ▼
 FastAPI (api/main.py)
