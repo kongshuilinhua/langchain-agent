@@ -903,7 +903,22 @@ def test_tool_crud_http_security_and_secret_redaction(client, auth_headers):
 
     listed = client.get("/api/tools", headers=auth_headers)
     assert listed.status_code == 200
-    assert any(item["id"] == tool["id"] and item["auth"]["has_secret"] for item in listed.json()["items"])
+    listed_items = listed.json()["items"]
+    assert any(item["id"] == tool["id"] and item["auth"]["has_secret"] for item in listed_items)
+    tool_names = {item["name"] for item in listed_items}
+    assert {"web_search", "current_time", "calculator", "web_reader", "wikipedia", "arxiv_search"}.issubset(tool_names)
+    assert {
+        "image_search",
+        "news_search",
+        "qr_generator",
+        "currency_converter",
+        "ip_lookup",
+        "url_shortener",
+        "horoscope",
+        "joke_generator",
+        "advice_slip",
+        "bored_activity",
+    }.isdisjoint(tool_names)
     assert "tool-secret-token" not in listed.text
     assert "encrypted_secret" not in listed.text
 

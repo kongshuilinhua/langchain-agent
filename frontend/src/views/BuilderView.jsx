@@ -972,7 +972,7 @@ function ModelConfigPanel({ agentForm, models, openMyModels, setAgentForm, setRa
         user_model_config_id: model?.id || '',
         model_id: '',
         model: model?.chat_model || agentForm.model,
-        temperature: model?.default_temperature ?? agentForm.temperature ?? 0.4,
+        temperature: agentForm.temperature ?? 0.4,
       });
       return;
     }
@@ -982,7 +982,7 @@ function ModelConfigPanel({ agentForm, models, openMyModels, setAgentForm, setRa
       model_id: model?.id || '',
       user_model_config_id: '',
       model: model?.model_name || agentForm.model,
-      temperature: model?.default_temperature ?? agentForm.temperature ?? 0.4,
+      temperature: agentForm.temperature ?? 0.4,
     });
   }
 

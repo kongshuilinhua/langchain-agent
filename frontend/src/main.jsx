@@ -37,7 +37,6 @@ import {
   Search,
   Send,
   ServerCog,
-  Settings2,
   Shield,
   Sparkles,
   SquarePen,
@@ -4613,7 +4612,7 @@ function UserModelsPanel({
             </button>
             <header className="model-dialog-heading">
               <h3>新增模型</h3>
-              <p>选择厂商预设，填入 API Key 和模型名；图片测试只作为诊断信息。</p>
+              <p>选择厂商预设，填入 API Key 和模型名；运行温度等参数在智能体配置里决定。</p>
             </header>
             <form className="user-model-form" onSubmit={submitUserModel}>
               <div className="provider-preset-panel">
@@ -4644,7 +4643,7 @@ function UserModelsPanel({
                 <div className="model-channel-card">
                   <div className="model-channel-heading">
                     <strong>聊天模型</strong>
-                    <small>用于 Agent 对话、工具推理；图片会直接交给所选模型处理。</small>
+                    <small>用于 Agent 对话和工具推理；这里只维护连接与基础能力。</small>
                   </div>
                   <div className="user-model-grid compact">
                     <label className="field-stack">
@@ -4662,30 +4661,6 @@ function UserModelsPanel({
                     <label className="field-stack">
                       <span>chat_model</span>
                       <input value={form.chat_model} onChange={(event) => updateForm({ chat_model: event.target.value, preset_id: form.preset_id || 'custom' })} placeholder="qwen-plus" />
-                    </label>
-                    <label className="field-stack">
-                      <span>默认温度</span>
-                      <input type="number" min="0" max="2" step="0.1" value={form.default_temperature} onChange={(event) => updateForm({ default_temperature: event.target.value, preset_id: form.preset_id || 'custom' })} />
-                    </label>
-                    <label className="field-stack">
-                      <span>最大上下文</span>
-                      <input type="number" min="1" value={form.max_context} onChange={(event) => updateForm({ max_context: event.target.value, preset_id: form.preset_id || 'custom' })} />
-                    </label>
-                    <label className="field-stack">
-                      <span>深度思考能力</span>
-                      <select
-                        value={form.reasoning_type || 'none'}
-                        onChange={(event) => updateForm({
-                          reasoning_type: event.target.value,
-                          supports_reasoning: event.target.value !== 'none',
-                          reasoning_label: reasoningLabel(event.target.value),
-                          preset_id: form.preset_id || 'custom',
-                        })}
-                      >
-                        <option value="none">不支持</option>
-                        <option value="prompt">提示词增强</option>
-                        <option value="native">原生推理</option>
-                      </select>
                     </label>
                   </div>
                 </div>
@@ -4764,13 +4739,13 @@ function UserModelsPanel({
             </button>
             <header className="model-dialog-heading">
               <h3>编辑模型</h3>
-              <p>修改模型地址、名称和运行参数。API Key 不回显，需要用“替换 Key”单独更新。</p>
+              <p>修改模型地址和名称。API Key 不回显，需要用“替换 Key”单独更新。</p>
             </header>
             <form className="user-model-form" onSubmit={submitEditUserModel}>
               <div className="model-channel-card">
                 <div className="model-channel-heading">
                   <strong>{editConfig.display_name || editConfig.chat_model}</strong>
-                  <small>测试连接会检查 chat 和图片请求，但图片发送不依赖预探测结果。</small>
+                  <small>测试连接会检查 chat 和图片请求；运行参数由具体智能体决定。</small>
                 </div>
                 <div className="user-model-grid compact">
                   <label className="field-stack">
@@ -4784,29 +4759,6 @@ function UserModelsPanel({
                   <label className="field-stack">
                     <span>chat_model</span>
                     <input value={editForm.chat_model} onChange={(event) => updateEditForm({ chat_model: event.target.value })} />
-                  </label>
-                  <label className="field-stack">
-                    <span>默认温度</span>
-                    <input type="number" min="0" max="2" step="0.1" value={editForm.default_temperature} onChange={(event) => updateEditForm({ default_temperature: event.target.value })} />
-                  </label>
-                  <label className="field-stack">
-                    <span>最大上下文</span>
-                    <input type="number" min="1" value={editForm.max_context} onChange={(event) => updateEditForm({ max_context: event.target.value })} />
-                  </label>
-                  <label className="field-stack">
-                    <span>深度思考能力</span>
-                    <select
-                      value={editForm.reasoning_type || 'none'}
-                      onChange={(event) => updateEditForm({
-                        reasoning_type: event.target.value,
-                        supports_reasoning: event.target.value !== 'none',
-                        reasoning_label: reasoningLabel(event.target.value),
-                      })}
-                    >
-                      <option value="none">不支持</option>
-                      <option value="prompt">提示词增强</option>
-                      <option value="native">原生推理</option>
-                    </select>
                   </label>
                 </div>
                 <div className="model-checks state-checks">
@@ -4919,7 +4871,6 @@ function ModelAdminPanel({ createModelConfig, deleteModelConfig, models, request
   const [form, setForm] = useState(createModelForm);
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [rowNotice, setRowNotice] = useState({ modelId: null, message: '' });
 
   function applyPreset(preset) {
@@ -4940,7 +4891,6 @@ function ModelAdminPanel({ createModelConfig, deleteModelConfig, models, request
       await createModelConfig(modelFormPayload(form));
       setForm(createModelForm());
       setFormOpen(false);
-      setAdvancedOpen(false);
     } catch (err) {
       setProfileError(errorMessage(err));
     } finally {
@@ -4950,7 +4900,6 @@ function ModelAdminPanel({ createModelConfig, deleteModelConfig, models, request
 
   function openCreateModel() {
     setForm(createModelForm());
-    setAdvancedOpen(false);
     setRowNotice({ modelId: null, message: '' });
     setProfileError('');
     setFormOpen(true);
@@ -4959,7 +4908,6 @@ function ModelAdminPanel({ createModelConfig, deleteModelConfig, models, request
   function closeCreateModel() {
     if (saving) return;
     setFormOpen(false);
-    setAdvancedOpen(false);
   }
 
   async function patchModel(model, patch) {
@@ -5064,56 +5012,10 @@ function ModelAdminPanel({ createModelConfig, deleteModelConfig, models, request
                   <Wand2 size={16} />
                   <span>
                     <strong>Qwen 快捷预设</strong>
-                    <small>填入 qwen-plus、OpenAI-compatible、文本能力、131072 上下文和 0.4 温度。</small>
+                    <small>填入 qwen-plus、OpenAI-compatible 和常用能力声明。运行温度在智能体配置里决定。</small>
                   </span>
                   <button type="button" className="preset-action" disabled={saving} onClick={() => applyPreset('qwen_plus')}>填入 qwen-plus</button>
                 </div>
-              </div>
-              <div className="model-form-section">
-                <button className="model-advanced-toggle" type="button" onClick={() => setAdvancedOpen(!advancedOpen)}>
-                  <Settings2 size={15} />
-                  高级字段
-                  <span>{advancedOpen ? '收起' : '展开'}</span>
-                </button>
-                {advancedOpen && (
-                  <div className="model-advanced-grid">
-                    <label className="field-stack">
-                      <span>provider</span>
-                      <input value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value, preset: 'custom' })} placeholder="openai-compatible" />
-                    </label>
-                    <label className="field-stack">
-                      <span>最大上下文</span>
-                      <input type="number" min="1" value={form.max_context} onChange={(event) => setForm({ ...form, max_context: event.target.value, preset: 'custom' })} placeholder="131072" />
-                    </label>
-                    <label className="field-stack">
-                      <span>默认温度</span>
-                      <input type="number" min="0" max="2" step="0.1" value={form.default_temperature} onChange={(event) => setForm({ ...form, default_temperature: event.target.value, preset: 'custom' })} placeholder="0.4" />
-                    </label>
-                    <label className="field-stack">
-                      <span>深度思考能力</span>
-                      <select
-                        value={form.reasoning_type || 'none'}
-                        onChange={(event) => setForm({
-                          ...form,
-                          reasoning_type: event.target.value,
-                          supports_reasoning: event.target.value !== 'none',
-                          reasoning_label: reasoningLabel(event.target.value),
-                          preset: 'custom',
-                        })}
-                      >
-                        <option value="none">不支持</option>
-                        <option value="prompt">提示词增强</option>
-                        <option value="native">原生推理</option>
-                      </select>
-                    </label>
-                    <div className="model-capability-summary">
-                      <span className={form.supports_text ? 'enabled' : ''}>{form.supports_text ? '文本' : '文本未声明'}</span>
-                      <span className={form.supports_image ? 'enabled' : ''}>{form.supports_image ? '图片声明' : '图片未声明'}</span>
-                      <span className="enabled">文档附件后端解析</span>
-                      <span className={reasoningCapabilityForModel(form).supported ? 'enabled' : ''}>{reasoningCapabilityForModel(form).label}</span>
-                          </div>
-                  </div>
-                )}
               </div>
               <div className="model-form-actions">
                 <button className="primary-model-action" type="submit" disabled={saving || !form.display_name.trim() || !form.model_name.trim()}><Plus size={15} />保存系统模型</button>
@@ -5127,7 +5029,7 @@ function ModelAdminPanel({ createModelConfig, deleteModelConfig, models, request
           <div className="model-admin-row" key={model.id}>
             <div className="model-admin-main">
               <strong>{model.display_name || model.model_name}</strong>
-              <small>{model.model_name} · {model.provider} · 上下文 {model.max_context}</small>
+              <small>{model.model_name} · {model.provider}</small>
               <div className="model-row-tags">
                 <span className={model.enabled ? 'enabled' : ''}>{model.enabled ? '启用' : '已停用'}</span>
                 {modelCapabilityChips(model).map((label) => (

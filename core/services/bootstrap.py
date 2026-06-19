@@ -18,6 +18,14 @@ from core.db.models import (
 from core.security.auth import hash_password
 from core.services.tools import BUILTIN_TOOLS
 
+MVP_BUILTIN_TOOL_NAMES = {
+    "current_time",
+    "calculator",
+    "web_reader",
+    "wikipedia",
+    "arxiv_search",
+}
+
 # 🎯 默认内置智能体节点编排流转流程（典型 ReAct/RAG 工作流骨架）
 # 该默认工作流向初学者演示了一个健壮的 Agent 运行轨迹：接收输入 -> 知识检索 -> 工具决策 -> 大模型提炼 -> 最终回答
 DEFAULT_WORKFLOW = [
@@ -47,8 +55,9 @@ def ensure_builtin_tools(db: Session) -> None:
           告诉 SQLAlchemy 跳过把被删数据同步到当前 Session 缓存（一级缓存）的步骤。
           在高并发或大表清理场景中，该设置极大地加速了 delete 执行，并防止了 OOM。
     """
-    # Clean up legacy builtin tools whose names are no longer in the registry.
-    registry_names = set(BUILTIN_TOOLS.keys())
+    # Keep the MVP tool surface focused: search + a few explainable builtins +
+    # user-defined HTTP tools. Legacy toy builtin rows are removed from databases.
+    registry_names = MVP_BUILTIN_TOOL_NAMES
     legacy_ids = [
         row.id for row in db.query(Tool.id).filter(
             Tool.type == "builtin",
@@ -59,15 +68,17 @@ def ensure_builtin_tools(db: Session) -> None:
         db.query(AgentTool).filter(AgentTool.tool_id.in_(legacy_ids)).delete(synchronize_session=False)
         db.query(Tool).filter(Tool.id.in_(legacy_ids)).delete(synchronize_session=False)
 
-    # Upsert builtin tools from registry.
-    for name, impl in BUILTIN_TOOLS.items():
+    # Upsert the small builtin set that is useful for an internship MVP demo.
+    for name in MVP_BUILTIN_TOOL_NAMES:
+        impl = BUILTIN_TOOLS[name]
         tool = db.query(Tool).filter(Tool.name == name, Tool.type == "builtin").first()
         if tool:
             tool.description = impl["description"]
+            tool.schema = impl.get("parameters") or {}
             tool.label = name
             tool.enabled = True
             continue
-        db.add(Tool(name=name, label=name, description=impl["description"], schema={}, type="builtin", enabled=True))
+        db.add(Tool(name=name, label=name, description=impl["description"], schema=impl.get("parameters") or {}, type="builtin", enabled=True))
 
     # Upsert builtin_search adapter.
     search_tool = db.query(Tool).filter(Tool.name == "web_search").first()
