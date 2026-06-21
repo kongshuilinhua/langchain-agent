@@ -48,22 +48,28 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + MySQL，�
 
 ### RAG 检索增强
 - 默认开启 RAG，支持单轮关闭 / RAG pill 标记
+- **查询理解前置**：一次轻量 LLM 调用做问题重写/多轮指代补全 + 意图分类 + 路由 + 低置信澄清，任何失败降级为等价现状（可选 LangChain `with_structured_output` 解析，`QU_PARSER`）
 - 检索管线：
-  - **Parent-Child Chunk**：父块保留完整上下文，子块用于精确检索
+  - **Parent-Child Chunk + 父块扩展（small-to-big）**：子块负责精确命中与排序，喂给 LLM 时换成对应父块全文并按 parent_id 去重（`RAG_PARENT_EXPANSION`）
   - **Dense Retrieval**：向量相似度检索（Embedding → Milvus/内存）
   - **中文 BM25**：关键词稀疏检索，与 Dense 互补
   - **RRF 融合**（Reciprocal Rank Fusion）：合并 Dense + BM25 排序结果
   - **可选 Rerank**：`qwen3-rerank` 模型精排
   - **Redis 缓存**：相同 query 在 TTL 内直接返回缓存结果
+- **可选 CRAG 自纠检索**（LangGraph）：检索 → LLM 相关性评分 → 证据不足则改写查询重检索，有界轮数 + 失败回退原生单趟（`RAG_SELF_CORRECT`，默认关）
 - 结构化引用来源展示
 - 证据不足时拒绝回答（`RAG_REFUSE_WHEN_NO_EVIDENCE`）
 
 ### 知识库管理
 - 创建知识库（名称 + 描述）
-- 支持文本直接录入和文件上传（TXT/MD/CSV/PDF/DOCX）
+- 支持文本直接录入和文件上传（TXT/MD/CSV/PDF/DOCX；可选 LangChain DocumentLoaders 接入 HTML，`INGEST_LANGCHAIN_LOADERS`）
+- **异步入库**：上传请求立即返回（状态 `indexing`），分块/向量化/落库经后台执行，状态机 `indexing → indexed/failed`；前端按状态轮询刷新
 - 文档入库 → 文本提取 → 分段存储为 parent-child chunk → 写入向量库 + MySQL
+- **失败重试**：失败文档可一键「重新索引」，原子状态守卫防并发重复执行
+- **崩溃恢复**：进程重启时复位卡在 `indexing` 的文档为 `failed`，允许重试
+- **扫描件/空 PDF 明确报错**：提取不到文本时直接标失败并提示，不静默入库成空
 - 文档列表、删除文档（同步清理 MySQL + 向量数据）
-- 同步索引（reindex）：重建全部文档的向量索引
+- 整库重建（reindex）：异步重建全部文档索引，返回 running job
 - 支持自定义分段策略（层级分段 / 自定义分块参数 / 预览）
 - 索引作业状态查询（通过 Redis）
 
@@ -79,7 +85,7 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + MySQL，�
 - 运行记录（Run/RunStep）追踪每次工具调用
 
 ### 会话记忆
-- Session Summary 记忆：自动压缩历史消息为摘要，超长上下文时注入
+- Session Summary 记忆：最近窗口 + 旧轮次 LLM 增量摘要，超阈值时把较旧对话压成摘要、保留最近若干轮原文，摘要失败降级保留旧摘要（`MEMORY_SUMMARY_*`）
 - Memory Profile：用户级记忆画像，跨会话持久化
 - 发布快照隔离：草稿聊天使用当前配置，已发布聊天使用发布时的快照配置
 
@@ -88,9 +94,11 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + MySQL，�
 - 每个节点产生 RunStep 记录，可追溯执行路径
 - 支持自定义工作流节点顺序
 
-### 评测
+### 评测与可观测
 - 提供 `eval/rag_cases.jsonl` 评测数据集
 - 运行脚本：`python eval/run_rag_eval.py --mock`（mock 模式免 API 调用快速验证）
+- **ragas 离线评测**（可选）：`python eval/run_ragas_eval.py --live` 真实检索+生成后计算 faithfulness / answer_relevancy / context_precision
+- **LangSmith 全链路追踪**（可选）：设 `LANGSMITH_TRACING=true` + key 后，LangChain/LangGraph 调用自动上报
 
 ---
 
@@ -106,6 +114,7 @@ Lingshu Agent 是一个全栈智能体平台，后端基于 FastAPI + MySQL，�
 | LLM 网关 | OpenAI 兼容接口 | DashScope / DeepSeek / 自定义 |
 | Embedding | OpenAI 兼容接口 | 默认 `text-embedding-v4` |
 | Rerank | OpenAI 兼容接口 | 默认 `qwen3-rerank` |
+| LangChain 生态（可选，flag 控制） | LangChain / LangGraph / LangSmith / ragas | 结构化输出抽取、CRAG 自纠检索、全链路追踪、RAG 离线评测；默认走原生实现，开关切换 |
 | 中文分词 | jieba | BM25 检索的中文分词 |
 | BM25 检索 | rank-bm25 | 关键词稀疏检索，与 Dense 互补 |
 | 文档解析 | PyPDF / stdlib (zipfile+xml) | PDF + DOCX，纯 Python 无额外依赖 |
@@ -210,6 +219,18 @@ RAG_RERANK_ENABLED=true           # 是否启用 Rerank
 RAG_RERANK_MODEL=qwen3-rerank     # Rerank 模型
 RAG_CACHE_TTL_SECONDS=3600        # RAG 缓存过期时间
 RAG_REFUSE_WHEN_NO_EVIDENCE=true  # 证据不足时拒答
+RAG_PARENT_EXPANSION=true         # 父块扩展（small-to-big）
+
+# 会话记忆摘要
+MEMORY_SUMMARY_ENABLED=true       # 旧轮次 LLM 增量摘要
+MEMORY_SUMMARY_MAX_CHARS=800
+MEMORY_KEEP_RECENT_TURNS=3
+
+# LangChain 生态（均默认关/原生，按需开启）
+QU_PARSER=native                  # native | langchain（查询理解结构化输出）
+RAG_SELF_CORRECT=false            # LangGraph CRAG 自纠检索
+INGEST_LANGCHAIN_LOADERS=false    # LangChain DocumentLoaders（HTML 等）
+LANGSMITH_TRACING=false           # LangSmith 全链路追踪（需 LANGSMITH_API_KEY）
 
 # 网络搜索
 WEB_SEARCH_ENABLED=true
@@ -217,7 +238,7 @@ WEB_SEARCH_PROVIDER=duckduckgo_html
 
 # 其他
 INVITE_API_ENABLED=false          # 邀请 API 开关
-UPLOAD_MAX_BYTES=8388608          # 上传文件大小上限
+UPLOAD_MAX_BYTES=31457280         # 上传文件大小上限（30MB）
 ```
 
 ---
@@ -294,7 +315,7 @@ npm run dev   # http://127.0.0.1:5174
 | Sessions | `GET /api/agents/{id}/sessions` `GET/PATCH/DELETE /api/sessions/{id}` | 会话管理 |
 | Runs | `GET /api/runs/{id}` `GET /api/runs/{id}/steps` | 运行记录 |
 | Feedback | `POST /api/messages/{id}/feedback` | 消息反馈 |
-| Knowledge | `GET/POST /api/knowledge-bases` `POST .../{id}/documents` `POST .../{id}/index` `DELETE ...`| 知识库管理 |
+| Knowledge | `GET/POST /api/knowledge-bases` `POST .../{id}/documents` `POST .../{id}/index` `POST .../documents/{id}/reindex` `DELETE ...`| 知识库管理（含失败文档重试） |
 | Tools | `GET/POST /api/tools` `PATCH/DELETE /api/tools/{id}` `POST .../{id}/test` | 工具管理 |
 | Prompt Templates | `GET/POST /api/prompt-templates` | 提示词模板 |
 | Uploads | `POST /api/uploads` | 文件上传 |
@@ -329,6 +350,22 @@ FastAPI (api/main.py)
           ├─→ Redis (RAG 缓存)
           └─→ LLM Provider (DashScope / DeepSeek / 自定义)
 ```
+
+---
+
+## 测试
+
+```powershell
+# 需指向一次性测试库（切勿用生产库）；纯函数/单元测试无需 DB 会自动 skip
+$env:TEST_DATABASE_URL = "mysql+pymysql://lingshu:lingshu@<host>:3306/lingshu_agent_test"
+$env:DATABASE_URL = $env:TEST_DATABASE_URL
+$env:LINGSHU_MOCK_LLM = "true"; $env:LINGSHU_VECTOR_BACKEND = "memory"
+pytest tests/ --timeout=60
+```
+
+- **CI（GitHub Actions）**：`CI`(发布检查) + `Lint & Test`(ruff + compile + pytest) 两条流水线。
+- CI 自带 MySQL service；`test_platform_api.py` 及 `test_final_rag.py` 的 3 个 client-fixture 集成用例在 CI 环境有连接/探针的环境限制，**仅本地运行**，CI 已 `--ignore`/`--deselect`，其余全部单元/功能/入库/LangChain 测试在 CI 执行。
+- `core.db.session.init_db` 在无 `SUPER` 权限的库上会跳过触发器创建（告警不阻断），便于受限环境与测试。
 
 ---
 
