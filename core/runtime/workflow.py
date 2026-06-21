@@ -404,15 +404,20 @@ class WorkflowRunner:
                     for row in self.db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.agent_id == agent.id).all()
                 ]
 
-            # 执行 RAG 向量混合检索与重排重估
-            rag_result = retrieve(
-                self.db,
-                workspace_id=agent.workspace_id,
-                knowledge_base_ids=kb_ids,
-                query=context.get("rewritten_query") or context["input"],
-                config=context.get("rag_config") or {},
-                runtime_config=getattr(agent, "runtime_config", None),
-            )
+            # 执行 RAG 向量混合检索与重排重估；自纠模式默认关闭，关闭时仍走原生单趟路径。
+            retrieve_kwargs = {
+                "workspace_id": agent.workspace_id,
+                "knowledge_base_ids": kb_ids,
+                "query": context.get("rewritten_query") or context["input"],
+                "config": context.get("rag_config") or {},
+                "runtime_config": getattr(agent, "runtime_config", None),
+            }
+            if get_settings().rag_self_correct:
+                from core.runtime.self_correct_retrieval import self_correct_retrieve
+
+                rag_result = self_correct_retrieve(self.db, **retrieve_kwargs)
+            else:
+                rag_result = retrieve(self.db, **retrieve_kwargs)
             sources = rag_result.sources
             status = {**rag_result.status, "effective_source": effective_source}
             return {"sources": sources, "rag_enabled": True, "rag_status": status, "events": [{"event": "rag_status", "data": status}]}

@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     # 🎯 父块扩展（small-to-big 检索）：用 child 小块精准命中、排序，最终喂给 LLM 时换成对应父块全文。
     # 检索精度与上下文完整性兼得；无父块（旧数据/非层级切分）自动回退到 child 全文。
     rag_parent_expansion: bool = Field(default=True, alias="RAG_PARENT_EXPANSION")
+    # LangGraph CRAG-lite 自纠检索，默认关闭以保留原生单趟检索行为
+    rag_self_correct: bool = Field(default=False, alias="RAG_SELF_CORRECT")
+    rag_self_correct_max_rounds: int = Field(default=2, alias="RAG_SELF_CORRECT_MAX_ROUNDS")
 
     # ── Web 搜索 ────────────────────────────────────────────────
     web_search_enabled: bool = Field(default=True, alias="WEB_SEARCH_ENABLED")
