@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     # 查询理解解析器：默认保留原生 JSON 解析；可选 LangChain 结构化输出
     qu_parser: str = Field(default="native", alias="QU_PARSER")
 
+    # ── LangSmith 可观测性（默认关闭，不产生外部 trace） ────────
+    langsmith_tracing: bool = Field(default=False, alias="LANGSMITH_TRACING")
+    langsmith_api_key: str | None = Field(default=None, alias="LANGSMITH_API_KEY")
+    langsmith_project: str = Field(default="lingshu-agent", alias="LANGSMITH_PROJECT")
+
     # ── 向量数据库 (Milvus) ─────────────────────────────────────
     milvus_uri: str = Field(default="http://192.168.150.101:19530", alias="MILVUS_URI")
     milvus_token: str | None = Field(default=None, alias="MILVUS_TOKEN")

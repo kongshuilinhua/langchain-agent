@@ -94,6 +94,12 @@ def startup() -> None:
             "Set a strong random secret via the JWT_SECRET environment variable."
         )
     try:
+        from core.integrations.langsmith_setup import configure_langsmith
+
+        configure_langsmith()
+    except Exception:
+        logger.exception("LangSmith configuration failed; tracing remains disabled")
+    try:
         init_db()
         startup_error = None
         # 崩溃恢复：复位上次进程退出时卡在 indexing 的文档（后台入库任务随进程丢失）。
