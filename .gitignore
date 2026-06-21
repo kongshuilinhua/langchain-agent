@@ -62,3 +62,7 @@ CONTRIBUTING.md
 # 备份文件
 *.bak
 test_*.py
+
+# 开发用临时脚本与本地数据集，不入库
+scratch/
+dataset/
