@@ -36,6 +36,8 @@ def client(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("LINGSHU_MOCK_LLM", "true")
     monkeypatch.setenv("LINGSHU_VECTOR_BACKEND", "memory")
+    # 上传体积限额测试假设 8MB；运行时默认已调大到 30MB，固定测试环境为 8MB 让限额机制校验成立。
+    monkeypatch.setenv("UPLOAD_MAX_BYTES", str(8 * 1024 * 1024))
     for key in [
         "OPENAI_API_KEY",
         "DASHSCOPE_API_KEY",

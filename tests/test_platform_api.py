@@ -1414,6 +1414,15 @@ def test_knowledge_documents_can_be_listed_and_deleted(client, auth_headers):
     assert empty.json()["items"] == []
 
 
+def _document_after_upload(client, auth_headers, kb_id, document_id):
+    """入库已异步化：上传请求立即返回 status=indexing，后台完成后再拉取最终落库状态。
+
+    TestClient 会在返回响应前同步跑完 BackgroundTasks，因此上传调用返回后该文档已落库完成，
+    重新 GET 即可拿到 indexed/failed 终态。"""
+    listed = client.get(f"/api/knowledge-bases/{kb_id}/documents", headers=auth_headers)
+    return next(item for item in listed.json()["items"] if item["id"] == document_id)
+
+
 def test_knowledge_document_text_contract_returns_day03_metadata(client, auth_headers):
     kb = client.post("/api/knowledge-bases", headers=auth_headers, json={"name": "Day03 Text KB"})
     kb_id = kb.json()["knowledge_base"]["id"]
@@ -1433,11 +1442,12 @@ def test_knowledge_document_text_contract_returns_day03_metadata(client, auth_he
     assert payload["filename"] == "Warranty policy"
     assert payload["title"] == "Warranty policy"
     assert payload["source_type"] == "text"
-    assert payload["status"] == "indexed"
-    assert payload["chunk_count"] >= 1
     assert "day03-text-token" in payload["text_preview"]
-    assert payload["error_message"] is None
     assert payload["updated_at"]
+    indexed = _document_after_upload(client, auth_headers, kb_id, payload["id"])
+    assert indexed["status"] == "indexed"
+    assert indexed["chunk_count"] >= 1
+    assert indexed["error_message"] is None
 
 
 def test_knowledge_file_ingestion_supports_txt_md_csv_pdf_and_docx(client, auth_headers):
@@ -1471,10 +1481,11 @@ def test_knowledge_file_ingestion_supports_txt_md_csv_pdf_and_docx(client, auth_
         payload = document.json()["document"]
         assert payload["filename"] == filename
         assert payload["source_type"] == "file"
-        assert payload["status"] == "indexed"
-        assert payload["chunk_count"] >= 1
-        assert payload["error_message"] is None
         assert "day03-file-token" in payload["text_preview"]
+        indexed = _document_after_upload(client, auth_headers, kb_id, payload["id"])
+        assert indexed["status"] == "indexed"
+        assert indexed["chunk_count"] >= 1
+        assert indexed["error_message"] is None
 
 
 def test_knowledge_document_strips_nul_characters(client, auth_headers):
@@ -1492,9 +1503,9 @@ def test_knowledge_document_strips_nul_characters(client, auth_headers):
     )
     assert text_document.status_code == 200
     text_payload = text_document.json()["document"]
-    assert text_payload["status"] == "indexed"
     assert "\x00" not in text_payload["text_preview"]
     assert "alphabeta" in text_payload["text_preview"]
+    assert _document_after_upload(client, auth_headers, kb_id, text_payload["id"])["status"] == "indexed"
 
     file_document = client.post(
         f"/api/knowledge-bases/{kb_id}/documents",
@@ -1508,9 +1519,9 @@ def test_knowledge_document_strips_nul_characters(client, auth_headers):
     )
     assert file_document.status_code == 200
     file_payload = file_document.json()["document"]
-    assert file_payload["status"] == "indexed"
     assert "\x00" not in file_payload["text_preview"]
     assert "filetoken" in file_payload["text_preview"]
+    assert _document_after_upload(client, auth_headers, kb_id, file_payload["id"])["status"] == "indexed"
 
 
 def test_knowledge_file_ingestion_errors_are_statused_and_sanitized(client, auth_headers):
@@ -1574,7 +1585,9 @@ def test_regular_user_can_manage_own_knowledge_base(client, auth_headers):
 
     indexed = client.post(f"/api/knowledge-bases/{kb_id}/index", headers=user_headers)
     assert indexed.status_code == 200
-    assert indexed.json()["status"] == "succeeded"
+    # 整库重建已异步化：接口返回 running job，后台完成后查询 job 终态。
+    job = client.get(f"/api/knowledge/jobs/{indexed.json()['job_id']}", headers=user_headers)
+    assert job.json()["status"] in {"succeeded", "unknown"}
 
     deleted = client.delete(f"/api/knowledge-bases/{kb_id}/documents/{document_id}", headers=user_headers)
     assert deleted.status_code == 200

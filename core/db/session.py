@@ -1,10 +1,29 @@
+import logging
 import re
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from core.config import get_settings
 from core.db.base import Base
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_trigger_ddl(label: str, statements: list[str]) -> None:
+    """
+    在单个事务内执行一组 DDL（含 CREATE TRIGGER）。
+
+    🛡️ 容错：受限环境（如无 SUPER 权限 + 开启 binlog 的 MySQL 会对 CREATE TRIGGER 抛 errno 1419）
+        下静默跳过并告警，不阻断 init_db。触发器仅是 DB 层唯一约束的兜底，缺失不影响应用层逻辑与测试。
+    """
+    try:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+    except OperationalError as exc:
+        logger.warning("跳过可选迁移 '%s'（数据库权限不足？触发器未创建）：%s", label, str(exc)[:200])
 
 
 # 🎯 全局配置解析：加载平台配置单例
@@ -110,26 +129,19 @@ def _run_compat_migrations() -> None:
         elif engine.dialect.name == "mysql":
             user_config_columns = {col["name"] for col in inspector.get_columns("user_model_configs")}
             if "is_default_ukey" not in user_config_columns:
-                with engine.begin() as connection:
+                _safe_trigger_ddl("user_model_configs.is_default_ukey", [
                     # 添加普通列（MySQL 生成列不能引用外键列，改用触发器维护）
-                    connection.execute(text(
-                        "ALTER TABLE user_model_configs ADD COLUMN is_default_ukey VARCHAR(64) NULL"
-                    ))
+                    "ALTER TABLE user_model_configs ADD COLUMN is_default_ukey VARCHAR(64) NULL",
                     # 唯一索引：MySQL 忽略 NULL，实现部分唯一约束效果
-                    connection.execute(text(
-                        "CREATE UNIQUE INDEX uq_one_default_per_user ON user_model_configs (is_default_ukey)"
-                    ))
+                    "CREATE UNIQUE INDEX uq_one_default_per_user ON user_model_configs (is_default_ukey)",
                     # 触发器：自动同步 is_default_ukey 的值
-                    connection.execute(text(
-                        "CREATE TRIGGER trg_umc_default_ins "
-                        "BEFORE INSERT ON user_model_configs FOR EACH ROW "
-                        "SET NEW.is_default_ukey = IF(NEW.is_default = 1, CAST(NEW.user_id AS CHAR(64)), NULL)"
-                    ))
-                    connection.execute(text(
-                        "CREATE TRIGGER trg_umc_default_upd "
-                        "BEFORE UPDATE ON user_model_configs FOR EACH ROW "
-                        "SET NEW.is_default_ukey = IF(NEW.is_default = 1, CAST(NEW.user_id AS CHAR(64)), NULL)"
-                    ))
+                    "CREATE TRIGGER trg_umc_default_ins "
+                    "BEFORE INSERT ON user_model_configs FOR EACH ROW "
+                    "SET NEW.is_default_ukey = IF(NEW.is_default = 1, CAST(NEW.user_id AS CHAR(64)), NULL)",
+                    "CREATE TRIGGER trg_umc_default_upd "
+                    "BEFORE UPDATE ON user_model_configs FOR EACH ROW "
+                    "SET NEW.is_default_ukey = IF(NEW.is_default = 1, CAST(NEW.user_id AS CHAR(64)), NULL)",
+                ])
     if "model_configs" in table_names:
         _ensure_columns(
             "model_configs",
@@ -181,35 +193,29 @@ def _run_compat_migrations() -> None:
         if engine.dialect.name == "mysql":
             tool_cols = {col["name"] for col in inspector.get_columns("tools")}
             if "global_name_ukey" not in tool_cols:
-                with engine.begin() as connection:
-                    connection.execute(text("ALTER TABLE tools ADD COLUMN global_name_ukey VARCHAR(200) NULL"))
-                    connection.execute(text("CREATE UNIQUE INDEX uq_tools_global_name ON tools (global_name_ukey)"))
-                    connection.execute(text(
-                        "CREATE TRIGGER trg_tools_global_name_ins "
-                        "BEFORE INSERT ON tools FOR EACH ROW "
-                        "SET NEW.global_name_ukey = IF(NEW.workspace_id IS NULL AND NEW.user_id IS NULL, NEW.name, NULL)"
-                    ))
-                    connection.execute(text(
-                        "CREATE TRIGGER trg_tools_global_name_upd "
-                        "BEFORE UPDATE ON tools FOR EACH ROW "
-                        "SET NEW.global_name_ukey = IF(NEW.workspace_id IS NULL AND NEW.user_id IS NULL, NEW.name, NULL)"
-                    ))
+                _safe_trigger_ddl("tools.global_name_ukey", [
+                    "ALTER TABLE tools ADD COLUMN global_name_ukey VARCHAR(200) NULL",
+                    "CREATE UNIQUE INDEX uq_tools_global_name ON tools (global_name_ukey)",
+                    "CREATE TRIGGER trg_tools_global_name_ins "
+                    "BEFORE INSERT ON tools FOR EACH ROW "
+                    "SET NEW.global_name_ukey = IF(NEW.workspace_id IS NULL AND NEW.user_id IS NULL, NEW.name, NULL)",
+                    "CREATE TRIGGER trg_tools_global_name_upd "
+                    "BEFORE UPDATE ON tools FOR EACH ROW "
+                    "SET NEW.global_name_ukey = IF(NEW.workspace_id IS NULL AND NEW.user_id IS NULL, NEW.name, NULL)",
+                ])
             if "owner_name_ukey" not in tool_cols:
-                with engine.begin() as connection:
-                    connection.execute(text("ALTER TABLE tools ADD COLUMN owner_name_ukey VARCHAR(400) NULL"))
-                    connection.execute(text("CREATE UNIQUE INDEX uq_tools_owner_name ON tools (owner_name_ukey)"))
-                    connection.execute(text(
-                        "CREATE TRIGGER trg_tools_owner_name_ins "
-                        "BEFORE INSERT ON tools FOR EACH ROW "
-                        "SET NEW.owner_name_ukey = IF(NEW.workspace_id IS NOT NULL AND NEW.user_id IS NOT NULL, "
-                        "CONCAT(NEW.workspace_id, ':', NEW.user_id, ':', NEW.name), NULL)"
-                    ))
-                    connection.execute(text(
-                        "CREATE TRIGGER trg_tools_owner_name_upd "
-                        "BEFORE UPDATE ON tools FOR EACH ROW "
-                        "SET NEW.owner_name_ukey = IF(NEW.workspace_id IS NOT NULL AND NEW.user_id IS NOT NULL, "
-                        "CONCAT(NEW.workspace_id, ':', NEW.user_id, ':', NEW.name), NULL)"
-                    ))
+                _safe_trigger_ddl("tools.owner_name_ukey", [
+                    "ALTER TABLE tools ADD COLUMN owner_name_ukey VARCHAR(400) NULL",
+                    "CREATE UNIQUE INDEX uq_tools_owner_name ON tools (owner_name_ukey)",
+                    "CREATE TRIGGER trg_tools_owner_name_ins "
+                    "BEFORE INSERT ON tools FOR EACH ROW "
+                    "SET NEW.owner_name_ukey = IF(NEW.workspace_id IS NOT NULL AND NEW.user_id IS NOT NULL, "
+                    "CONCAT(NEW.workspace_id, ':', NEW.user_id, ':', NEW.name), NULL)",
+                    "CREATE TRIGGER trg_tools_owner_name_upd "
+                    "BEFORE UPDATE ON tools FOR EACH ROW "
+                    "SET NEW.owner_name_ukey = IF(NEW.workspace_id IS NOT NULL AND NEW.user_id IS NOT NULL, "
+                    "CONCAT(NEW.workspace_id, ':', NEW.user_id, ':', NEW.name), NULL)",
+                ])
     if "agent_tools" in table_names:
         _ensure_columns(
             "agent_tools",
