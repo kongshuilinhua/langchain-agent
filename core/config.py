@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     health_model_probe_enabled: bool = Field(default=True, alias="HEALTH_MODEL_PROBE_ENABLED")
     # 🛡️ Mock LLM 模式：测试环境下跳过真实 API 调用，返回确定性伪造结果，保证 CI 稳定性
     mock_llm: bool = Field(default=False, validation_alias=AliasChoices("LINGSHU_MOCK_LLM", "SWEEPER_MOCK_LLM"))
+    # 查询理解解析器：默认保留原生 JSON 解析；可选 LangChain 结构化输出
+    qu_parser: str = Field(default="native", alias="QU_PARSER")
 
     # ── 向量数据库 (Milvus) ─────────────────────────────────────
     milvus_uri: str = Field(default="http://192.168.150.101:19530", alias="MILVUS_URI")

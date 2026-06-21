@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from core.config import get_settings
 
 # 意图标签
 INTENT_KNOWLEDGE = "knowledge"
@@ -19,6 +24,12 @@ ROUTE_CLARIFY = "clarify"
 _DEFAULT_CLARIFICATION = "我不太确定你的问题指向，可以补充说明一下你想了解什么吗？"
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+class QueryUnderstandingResult(BaseModel):
+    rewritten_query: str = Field(description="改写/指代补全后的自包含检索查询")
+    intent: Literal["knowledge", "tool", "chitchat"] = Field(description="意图分类")
+    confidence: float = Field(ge=0, le=1, description="置信度 0~1")
 
 
 def decide_route(intent: str, confidence: float, config: dict) -> tuple[str, str]:
@@ -102,6 +113,23 @@ def _build_messages(user_message: str, history: list[dict], history_turns: int) 
     ]
 
 
+def _analyze_langchain(messages, *, model, runtime_config) -> dict | None:
+    """用 LangChain 结构化输出解析查询理解；任何失败均返回 None。"""
+    try:
+        from core.integrations.langchain_provider import get_chat_model
+
+        chat = get_chat_model(model=model, temperature=0.0, runtime_config=runtime_config)
+        structured = chat.with_structured_output(QueryUnderstandingResult, method="function_calling")
+        result = structured.invoke(messages)
+        return {
+            "rewritten_query": result.rewritten_query,
+            "intent": result.intent,
+            "confidence": result.confidence,
+        }
+    except Exception:
+        return None
+
+
 def analyze(
     provider,
     *,
@@ -115,13 +143,21 @@ def analyze(
         return _passthrough(user_message, reason="disabled")
     try:
         messages = _build_messages(user_message, history or [], int(config.get("history_turns", 4)))
-        response = provider.chat(
-            messages,
-            model=config.get("model"),
-            temperature=0.0,
-            runtime_config=runtime_config,
-        )
-        data = _parse_understanding(response.content or "")
+        parser = config.get("parser") or get_settings().qu_parser
+        if parser == "langchain":
+            data = _analyze_langchain(
+                messages,
+                model=config.get("model"),
+                runtime_config=runtime_config,
+            )
+        else:
+            response = provider.chat(
+                messages,
+                model=config.get("model"),
+                temperature=0.0,
+                runtime_config=runtime_config,
+            )
+            data = _parse_understanding(response.content or "")
         if not data:
             return _passthrough(user_message, reason="error")
         rewritten = str(data.get("rewritten_query") or "").strip() or user_message
