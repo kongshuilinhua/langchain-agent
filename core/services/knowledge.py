@@ -13,7 +13,13 @@ from core.db.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument, Kno
 from core.integrations.llm import OpenAICompatibleProvider
 from core.integrations import vector_store as vector_store_module
 from core.services.rag import retrieve
-from core.services.uploads import DOC_TYPES, extract_document_text, sanitize_extracted_text
+from core.services.uploads import (
+    DOC_TYPES,
+    LANGCHAIN_EXTRA_SUFFIXES,
+    LANGCHAIN_EXTRA_TYPES,
+    extract_document_text,
+    sanitize_extracted_text,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -774,7 +780,11 @@ def _preview(text: str) -> str:
 
 def _is_supported_file(filename: str, content_type: str) -> bool:
     suffix = Path(filename).suffix.lower()
-    return content_type in SUPPORTED_FILE_TYPES or suffix in SUPPORTED_KNOWLEDGE_SUFFIXES
+    if content_type in SUPPORTED_FILE_TYPES or suffix in SUPPORTED_KNOWLEDGE_SUFFIXES:
+        return True
+    return get_settings().ingest_langchain_loaders and (
+        content_type in LANGCHAIN_EXTRA_TYPES or suffix in LANGCHAIN_EXTRA_SUFFIXES
+    )
 
 
 def _decode_base64(content_base64: str) -> bytes:

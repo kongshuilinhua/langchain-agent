@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = Field(default=None, alias="LANGSMITH_API_KEY")
     langsmith_project: str = Field(default="lingshu-agent", alias="LANGSMITH_PROJECT")
 
+    # LangChain DocumentLoaders 扩展文档类型，默认关闭以保留原生上传行为
+    ingest_langchain_loaders: bool = Field(default=False, alias="INGEST_LANGCHAIN_LOADERS")
+
     # ── 向量数据库 (Milvus) ─────────────────────────────────────
     milvus_uri: str = Field(default="http://192.168.150.101:19530", alias="MILVUS_URI")
     milvus_token: str | None = Field(default=None, alias="MILVUS_TOKEN")

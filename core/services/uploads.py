@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -17,6 +19,8 @@ from core.db.models import Upload
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 TEXT_TYPES = {"text/plain", "text/markdown", "application/markdown", "text/csv"}
 DOC_TYPES = TEXT_TYPES | {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+LANGCHAIN_EXTRA_SUFFIXES = {".html", ".htm"}
+LANGCHAIN_EXTRA_TYPES = {"text/html", "application/xhtml+xml"}
 
 
 def create_upload(db: Session, *, workspace_id: int, user_id: int, filename: str, content_type: str, content_base64: str) -> Upload:
@@ -123,7 +127,40 @@ def extract_document_text(filename: str, content_type: str, raw: bytes) -> str:
         return _extract_pdf_text(raw)
     if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or suffix == ".docx":
         return _extract_docx_text(raw)
+    if get_settings().ingest_langchain_loaders and (
+        suffix in LANGCHAIN_EXTRA_SUFFIXES or content_type in LANGCHAIN_EXTRA_TYPES
+    ):
+        return _extract_via_langchain(filename, raw)
     raise ValueError("Unsupported document type")
+
+
+def _extract_via_langchain(filename: str, raw: bytes) -> str:
+    """通过 LangChain loader 提取额外文档类型，并确保 Windows 临时文件可被重新打开。"""
+    suffix = Path(filename).suffix.lower()
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+            temp_file.write(raw)
+            temp_path = temp_file.name
+        try:
+            if suffix in {".html", ".htm"}:
+                from langchain_community.document_loaders import BSHTMLLoader
+
+                loader = BSHTMLLoader(
+                    temp_path,
+                    open_encoding="utf-8",
+                    bs_kwargs={"features": "lxml"},
+                    get_text_separator="\n",
+                )
+            else:
+                raise ValueError(f"Unsupported LangChain loader suffix: {suffix}")
+            documents = loader.load()
+            return "\n".join(document.page_content for document in documents)
+        finally:
+            if temp_path:
+                os.unlink(temp_path)
+    except Exception as exc:
+        raise ValueError(f"LangChain document extraction failed for {suffix or 'unknown'}") from exc
 
 
 def sanitize_extracted_text(text: str) -> str:
@@ -179,6 +216,10 @@ def _kind(content_type: str, filename: str) -> str:
     if content_type in IMAGE_TYPES or suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
         return "image"
     if content_type in DOC_TYPES or suffix in {".txt", ".md", ".markdown", ".csv", ".pdf", ".docx"}:
+        return "document"
+    if get_settings().ingest_langchain_loaders and (
+        content_type in LANGCHAIN_EXTRA_TYPES or suffix in LANGCHAIN_EXTRA_SUFFIXES
+    ):
         return "document"
     return "unknown"
 
