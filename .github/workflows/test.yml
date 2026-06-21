@@ -45,6 +45,11 @@ jobs:
       - name: Compile check
         run: python -m compileall api/ core/ -q
 
+      # init_db 会创建 TRIGGER；mysql:8.0 默认开 binlog 且 lingshu 用户无 SUPER，
+      # 否则 CREATE TRIGGER 会抛 errno 1419 导致用到 client fixture 的测试整体 setup 失败。
+      - name: Allow trigger creation on CI MySQL
+        run: mysql --protocol=tcp --host 127.0.0.1 --port 3306 -uroot -prootpassword -e "SET GLOBAL log_bin_trust_function_creators = 1;"
+
       - name: Run tests
         env:
           TEST_DATABASE_URL: mysql+pymysql://lingshu:lingshu@127.0.0.1:3306/lingshu_agent_test

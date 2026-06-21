@@ -26,7 +26,7 @@ from core.services.agents import get_agent_detail, normalize_memory, normalize_r
 from core.services import query_understanding as qu_service
 from core.services.rag import retrieve
 from core.services.memory import format_profile_memory, get_memory_profile, memory_used_event
-from core.services.memory_summary import build_memory_payload, summarize_turns
+from core.services.memory_summary import build_memory_payload, parse_memory, summarize_turns
 from core.services.models import resolve_agent_model
 from core.services.tools import execute_tool, tool_call_event, tool_schema_for_llm
 from core.services.uploads import get_workspace_uploads
