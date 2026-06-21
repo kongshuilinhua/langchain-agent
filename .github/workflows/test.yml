@@ -56,7 +56,7 @@ jobs:
           LINGSHU_MOCK_LLM: "true"
           LINGSHU_VECTOR_BACKEND: "memory"
           JWT_SECRET: test-secret-do-not-use-in-production
-        run: python -m pytest tests/ -v
+        run: python -m pytest tests/ -v --timeout=60
 
   frontend:
     runs-on: ubuntu-latest
