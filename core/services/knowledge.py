@@ -40,8 +40,6 @@ def mark_document_reindexing(db: Session, *, document_id: int) -> bool:
     """
     原子守卫：仅当文档不处于 indexing 时置为 indexing。返回是否成功抢到。
 
-    🎯 对照 ragent DocumentStatusHelper.tryMarkRunning：
-        .ne(KnowledgeDocumentDO::getStatus, DocumentStatus.RUNNING.getCode())
     🛡️ 一条带 WHERE status != 'indexing' 的原子 UPDATE + 检查 rowcount，
         防止并发重复执行（rabbitmq → BackgroundTasks，无需 Redis 锁）。
     """
@@ -240,7 +238,7 @@ def recover_interrupted_ingestion(db: Session) -> int:
     启动时崩溃恢复：把卡在 indexing 的文档复位为 failed。
 
     🎯 BackgroundTasks 在进程内运行，进程重启会丢失在途任务，留下永远卡在 indexing 的文档。
-        启动时（无任务在跑）统一复位，允许用户手动重新索引。对应 ragent 的 recoverStuckRunningDocuments。
+        启动时（无任务在跑）统一复位，允许用户手动重新索引。
     """
     stuck = db.query(KnowledgeDocument).filter(KnowledgeDocument.status == "indexing").all()
     for document in stuck:

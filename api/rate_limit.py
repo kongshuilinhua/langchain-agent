@@ -3,7 +3,7 @@
 
 🎯 架构角色：
     Phase 2 引入 slowapi 作为短期限流方案（内存计数器模式）。
-    Phase 3 将升级为基于 Redis ZSET + 信号量 + Pub/Sub 的分布式方案（参考 Ragent）。
+    Phase 3 将升级为基于 Redis ZSET + 信号量 + Pub/Sub 的分布式方案。
 
     当前配置：
     - 全局默认：200 请求/分钟

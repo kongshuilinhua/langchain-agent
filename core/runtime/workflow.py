@@ -1008,8 +1008,7 @@ class WorkflowRunner:
 
         🎯 意图与工程大局观：
             记忆的膨胀是导致 Agent 随着对话轮次加深逐渐失去精度（或发生高额费用）的罪魁祸首。
-            照搬 ragent 的 `最近窗口 + 旧轮次 LLM 增量摘要` 方案（对应
-            `DefaultConversationMemoryService.append` + `SummaryService.compressIfNeeded`）：
+            采用 `最近窗口 + 旧轮次 LLM 增量摘要` 方案：
             - 未超 `max_turns` 时，等价于现有滑动窗口，仅扁平存最近轮次。
             - 超阈值时，把较旧轮次交 `summarize_turns` 压成增量摘要，仅保留最近 `keep_recent` 轮原文，
               产出结构化载荷 `{"summary": ..., "turns": [...]}` 落库。

@@ -2,21 +2,16 @@
 灵枢 Agent 平台 —— 模型调用三态熔断器。
 
 🎯 架构角色：
-    参考 Ragent (nageoffer/ragent) 的三态熔断器设计（CLOSED → OPEN → HALF_OPEN）。
+    三态熔断器设计（CLOSED → OPEN → HALF_OPEN）。
     每个模型实例独立维护健康状态。当模型连续失败达到阈值时自动熔断，
     冷却期后进入半开状态放行探测请求，探测成功则恢复、失败则继续熔断。
 
-    Ragent 的设计要点：
+    设计要点：
     - 每个模型独立熔断器实例（通过模型名作为 key）
     - CLOSED: 正常状态，记录连续失败次数
     - OPEN: 熔断状态，拒绝所有请求（快速失败，不发起实际 HTTP 调用）
     - HALF_OPEN: 冷却期后自动进入，放行 1 次探测请求
     - 探测成功 → CLOSED，探测失败 → OPEN（重新计时冷却期）
-
-    与 Ragent 的三态对比：
-    - Ragent 用 Resilience4j/自研 → Lingshu 用纯 Python threading
-    - Ragent 通过 Spring Bean 管理 → Lingshu 集成到 OpenAICompatibleProvider
-    - 两者都支持独立模型粒度的健康状态追踪
 """
 
 import threading

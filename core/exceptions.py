@@ -3,20 +3,13 @@
 
 🎯 架构角色：
     本模块是平台所有异常的单一来源（Single Source of Truth）。
-    参考 Ragent (nageoffer/ragent) 的 AbstractException + IErrorCode 三层异常体系设计：
+    三层异常体系设计：
     - ErrorCode 枚举：可机器读取的错误码 + 人类可读的默认消息
     - AppException 基类：携带 ErrorCode、可选自定义消息、HTTP 状态码
     - 子类异常：按 HTTP 语义分类（BadRequest/Unauthorized/Forbidden/NotFound/...）
 
     在整个请求链路中，异常体系处于最外层的防御圈：
     业务代码抛 AppException → FastAPI exception_handler 拦截 → 统一 JSON 响应格式
-
-    与 Ragent 的对齐：
-    - Ragent AbstractException  → Lingshu AppException
-    - Ragent IErrorCode         → Lingshu ErrorCode(Enum)
-    - Ragent ClientException    → Lingshu BadRequestException(400)
-    - Ragent ServiceException   → Lingshu InternalException(500)
-    - Ragent RemoteException    → Lingshu ServiceUnavailableException(503)
 """
 
 from enum import Enum
@@ -27,8 +20,7 @@ class ErrorCode(Enum):
     平台统一错误码枚举。
 
     🎯 设计意图：
-        参考 Ragent 的 IErrorCode 接口——将错误码定义为枚举而非自由字符串，
-        确保：
+        将错误码定义为枚举而非自由字符串，确保：
         1. 编译时即可发现错误码拼写错误
         2. 新增错误类型必须显式声明
         3. 前端可以按 error_code 做精确的交互降级（而非对 message 做正则匹配）
@@ -117,7 +109,6 @@ class AppException(Exception):
     平台统一异常基类。
 
     🎯 设计意图：
-        参考 Ragent AbstractException 设计。
         每个 AppException 实例携带：
         - error_code: ErrorCode 枚举成员，提供机器可读的错误标识
         - message: 人类可读的错误描述（可选，未提供时回退到 ErrorCode 默认消息）

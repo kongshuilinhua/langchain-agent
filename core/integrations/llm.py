@@ -161,7 +161,7 @@ class OpenAICompatibleProvider:
         # 🛡️ 调试标记：记录上一次交互是否由 Mock 仿真模块接管，便于单元测试进行状态断言
         self.last_chat_mock = False
         self.last_embed_mock = False
-        # 🛡️ 三态熔断器：每个模型独立追踪健康状态（参考 Ragent 设计）
+        # 🛡️ 三态熔断器：每个模型独立追踪健康状态
         self._breakers: dict[str, CircuitBreaker] = {}
 
     def chat(

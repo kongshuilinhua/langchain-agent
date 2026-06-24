@@ -3,7 +3,7 @@
 
 🎯 架构角色：
     从 api/main.py 中提取权限检查和资源归属校验函数。
-    参考 Ragent 的分层设计：Controller 层只做路由调度，权限验证由独立模块提供。
+    分层设计：Controller 层只做路由调度，权限验证由独立模块提供。
 """
 
 from fastapi import HTTPException

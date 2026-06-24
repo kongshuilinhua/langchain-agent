@@ -1,8 +1,7 @@
 """
 会话记忆摘要服务。
 
-🎯 照搬 ragent JdbcConversationMemorySummaryService / DefaultConversationMemoryService 的
-   摘要压缩 + 加载装配逻辑，翻译成 Python 纯函数。
+🎯 摘要压缩 + 加载装配逻辑，纯函数实现。
 
 模式：
   - parse_memory → 兼容解析三种历史格式，纯函数
@@ -24,8 +23,7 @@ def parse_memory(raw: str) -> tuple[str, list[dict]]:
     兼容解析旧 summary：新 dict{summary,turns} / 旧 list[turn] / 旧 \\n===\\n 文本。
     返回 (summary, turns)。失败返回 ('', [])。
 
-    🎯 对照 ragent JdbcConversationMemoryStore.loadHistory：
-       解析 DB 中的消息列表 + summary 记录，装配为 ChatMessage 列表。
+    🎯 解析 DB 中的消息列表 + summary 记录，装配为结构化数据。
     """
     if not raw or not raw.strip():
         return "", []
@@ -85,10 +83,7 @@ def build_memory_payload(
     """
     合并当前轮、超阈值则把较旧 turns 交 summarizer 压缩。
 
-    🎯 对照 ragent：
-        - JdbcConversationMemorySummaryService.doCompressIfNeeded：超 triggerTurns 时取
-          较旧消息 → LLM 摘要 → 存 summary 记录。
-        - DefaultConversationMemoryService.load：摘要 + 最近窗口合并。
+    🎯 超阈值时把较旧 turns 交 summarizer 压成摘要，保留最近窗口。
 
     Args:
         raw: SessionMemory.summary 原始文本（三种格式兼容）
@@ -149,8 +144,7 @@ def _build_summary_messages(
     """
     构造摘要 LLM 调用的消息列表。
 
-    🎯 对照 ragent JdbcConversationMemorySummaryService.summarizeMessages：
-        system prompt → 历史摘要（如有，作为 assistant 消息）→ 待压缩 turns → user 指令。
+    🎯 system prompt → 历史摘要（如有，作为 assistant 消息）→ 待压缩 turns → user 指令。
     """
     system = (
         "你是一个对话摘要压缩器。把以下多轮对话压成简洁的中文要点摘要，"

@@ -71,7 +71,7 @@ app.add_middleware(
 
 @app.exception_handler(AppException)
 def app_exception_handler(request, exc: AppException):
-    """平台统一异常拦截器。参考 Ragent GlobalExceptionHandler 设计。"""
+    """平台统一异常拦截器。"""
     return JSONResponse(
         status_code=exc.status_code,
         content={"error_code": exc.error_code.code, "message": exc.message},

@@ -165,11 +165,11 @@ class Settings(BaseSettings):
     upload_max_bytes: int = Field(default=30 * 1024 * 1024, alias="UPLOAD_MAX_BYTES")
 
     # ── 会话记忆摘要 ──────────────────────────────────────────
-    # 🎯 对照 ragent MemoryProperties：summaryEnabled / summaryMaxChars / historyKeepTurns
+    # 🎯 会话记忆摘要配置
     memory_summary_enabled: bool = Field(default=True, alias="MEMORY_SUMMARY_ENABLED")
     # 🧠 摘要最大字符数：过长会突破模型上下文；800 字符可覆盖 3-5 轮对话的关键信息
     memory_summary_max_chars: int = Field(default=800, alias="MEMORY_SUMMARY_MAX_CHARS")
-    # 🧠 压缩后保留的最近轮数：对照 ragent historyKeepTurns
+    # 🧠 压缩后保留的最近轮数
     memory_keep_recent_turns: int = Field(default=3, alias="MEMORY_KEEP_RECENT_TURNS")
 
     # ── 存储路径 ────────────────────────────────────────────────
