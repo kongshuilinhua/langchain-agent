@@ -2658,6 +2658,9 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 .debug-event.memory_used {
   border-color: #fedf89;
 }
+.debug-event.memory_compaction {
+  border-color: #f4b8c4;
+}
 .debug-event.thinking_status,
 .debug-event.search_status {
   border-color: #bfdbfe;
@@ -4332,7 +4335,9 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 
 .workspace-doc-row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  /* 图标 | 详情 | 状态 | 重建索引(已索引/失败时才出现) | 删除。
+     必须 5 列：少于 5 列时删除按钮会被挤到隐式第二行导致看不见。 */
+  grid-template-columns: auto 1fr auto auto auto;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;

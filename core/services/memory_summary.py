@@ -12,6 +12,33 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
+try:
+    from langchain_core.messages.utils import trim_messages, count_tokens_approximately
+except ImportError:
+    count_tokens_approximately = lambda msgs: sum(len(m.content) for m in msgs) // 2
+
+    def trim_messages(messages, max_tokens, strategy, token_counter, start_on):
+        keep = []
+        tokens = 0
+        for msg in reversed(messages):
+            t = token_counter([msg])
+            if tokens + t <= max_tokens:
+                keep.append(msg)
+                tokens += t
+            else:
+                break
+        keep.reverse()
+        if start_on == "human" and keep and not isinstance(keep[0], HumanMessage):
+            keep = keep[1:]
+        return keep
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from core.integrations.langchain_provider import get_chat_model
+from langsmith import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -72,64 +99,152 @@ def _parse_separator_text(raw: str) -> list[dict]:
 # ── 核心载荷构建（纯函数）────────────────────────────────────────────
 
 
+def count_str_tokens(text: str) -> int:
+    return count_tokens_approximately([HumanMessage(content=text)])
+
+
+def soft_truncate(text: str, target_tokens: int) -> str:
+    current_tokens = count_str_tokens(text)
+    if current_tokens <= target_tokens:
+        return text
+
+    ratio = target_tokens / current_tokens
+    target_len = int(len(text) * ratio)
+    if target_len <= 0:
+        return "...(截断)"
+
+    boundaries = ['\n', '。', '.', '？', '?', '！', '!', '；', ';']
+    best_idx = -1
+    lookback = max(100, int(target_len * 0.2))
+    search_start = max(0, target_len - lookback)
+    for i in range(target_len - 1, search_start - 1, -1):
+        if text[i] in boundaries:
+            best_idx = i
+            break
+
+    if best_idx != -1:
+        return text[:best_idx + 1] + "...(截断)"
+    else:
+        return text[:target_len] + "...(截断)"
+
+
+def truncate_recent_turns(turns: list[dict], recent_token_budget: int | None = None) -> list[dict]:
+    if recent_token_budget is None:
+        recent_token_budget = 1500
+    flat_msgs = []
+    for idx, turn in enumerate(turns):
+        if "user" in turn:
+            flat_msgs.append({"turn_idx": idx, "role": "user", "text": turn["user"]})
+        if "assistant" in turn:
+            flat_msgs.append({"turn_idx": idx, "role": "assistant", "text": turn["assistant"]})
+
+    lc_msgs = []
+    for m in flat_msgs:
+        if m["role"] == "user":
+            lc_msgs.append(HumanMessage(content=m["text"]))
+        else:
+            lc_msgs.append(AIMessage(content=m["text"]))
+
+    total_tokens = count_tokens_approximately(lc_msgs)
+    excess = total_tokens - recent_token_budget
+    if excess <= 0:
+        return turns
+
+    for m in flat_msgs:
+        if excess <= 0:
+            break
+        text = m["text"]
+        curr_tokens = count_str_tokens(text)
+        min_keep = 150
+        if curr_tokens <= min_keep:
+            continue
+
+        target_tokens = max(min_keep, curr_tokens - excess)
+        truncated_text = soft_truncate(text, target_tokens)
+        reduced_tokens = curr_tokens - count_str_tokens(truncated_text)
+
+        m["text"] = truncated_text
+        excess -= reduced_tokens
+
+    new_turns = [dict(t) for t in turns]
+    for m in flat_msgs:
+        new_turns[m["turn_idx"]][m["role"]] = m["text"]
+
+    return new_turns
+
+
 def build_memory_payload(
     raw: str,
     new_turn: dict,
     *,
-    max_turns: int,
-    keep_recent: int,
+    token_budget: int | None = None,
+    recent_token_budget: int | None = None,
+    max_turns: int | None = None,
+    keep_recent: int | None = None,
     summarizer,
 ) -> dict:
     """
     合并当前轮、超阈值则把较旧 turns 交 summarizer 压缩。
-
-    🎯 超阈值时把较旧 turns 交 summarizer 压成摘要，保留最近窗口。
-
-    Args:
-        raw: SessionMemory.summary 原始文本（三种格式兼容）
-        new_turn: {"user": str, "assistant": str}
-        max_turns: 超过此轮数触发摘要压缩
-        keep_recent: 压缩后保留的最近轮数
-        summarizer: callable(older_turns: list[dict], existing_summary: str) -> str
-                    抛异常时降级为保留 existing_summary
-
-    Returns:
-        {"summary": str, "turns": list[dict]}  — 可直接 json.dumps 存入 DB。
     """
     summary, turns = parse_memory(raw)
     turns = turns + [new_turn]
 
-    if len(turns) <= max_turns:
-        payload = {"summary": summary, "turns": turns}
-        _truncate_assistant_if_needed(payload)
-        return payload
+    lc_msgs = []
+    msg_metadata = []
+    for idx, t in enumerate(turns):
+        u = t.get("user") or ""
+        a = t.get("assistant") or ""
+        if u:
+            lc_msgs.append(HumanMessage(content=u))
+            msg_metadata.append((idx, "user"))
+        if a:
+            lc_msgs.append(AIMessage(content=a))
+            msg_metadata.append((idx, "assistant"))
 
-    # 超出阈值：取较旧的 turns 交 summarizer 压缩
-    older = turns[:-keep_recent]
-    recent = turns[-keep_recent:]
+    if (token_budget is None or token_budget <= 0) and max_turns is not None:
+        if len(turns) <= max_turns:
+            payload = {"summary": summary, "turns": turns}
+            payload["turns"] = truncate_recent_turns(payload["turns"], recent_token_budget)
+            return payload
+        older_turns = turns[:-keep_recent]
+        recent_turns = turns[-keep_recent:]
+    else:
+        total_tokens = count_tokens_approximately(lc_msgs)
+        if total_tokens <= token_budget:
+            payload = {"summary": summary, "turns": turns}
+            payload["turns"] = truncate_recent_turns(payload["turns"], recent_token_budget)
+            return payload
+
+        trimmed_msgs = trim_messages(
+            lc_msgs,
+            max_tokens=recent_token_budget,
+            strategy="last",
+            token_counter=count_tokens_approximately,
+            start_on="human",
+        )
+
+        if not trimmed_msgs:
+            older_turns = turns
+            recent_turns = []
+        else:
+            num_trimmed = len(lc_msgs) - len(trimmed_msgs)
+            first_kept_turn_idx = msg_metadata[num_trimmed][0]
+            older_turns = turns[:first_kept_turn_idx]
+            recent_turns = turns[first_kept_turn_idx:]
 
     try:
-        new_summary = summarizer(older, summary) or summary
+        new_summary = summarizer(older_turns, summary) or summary
     except Exception:
         logger.warning("记忆摘要生成失败，降级保留旧摘要。", exc_info=True)
         new_summary = summary
 
-    payload = {"summary": new_summary, "turns": recent}
-    _truncate_assistant_if_needed(payload)
+    payload = {"summary": new_summary, "turns": recent_turns}
+    payload["turns"] = truncate_recent_turns(payload["turns"], recent_token_budget)
     return payload
 
 
 def _truncate_assistant_if_needed(payload: dict) -> None:
-    """
-    🛡️ 大响应截断保护。对照现有的 >2000 字节检查逻辑：
-    如果 serialized payload 字节超限，截断 assistant 文本到 500 字符防止塞爆上下文。
-    """
-    serialized = json.dumps(payload, ensure_ascii=False)
-    if len(serialized) > 2000:
-        for turn in payload.get("turns", []):
-            assistant_text = turn.get("assistant", "")
-            if isinstance(assistant_text, str) and len(assistant_text) > 500:
-                turn["assistant"] = assistant_text[:500] + "...(此回答过长已截断)..."
+    pass
 
 
 # ── LLM 摘要器 ────────────────────────────────────────────────────────
@@ -181,6 +296,7 @@ def _build_summary_messages(
     return messages
 
 
+@traceable(name="memory.compact")
 def summarize_turns(
     provider,
     *,
@@ -193,18 +309,8 @@ def summarize_turns(
     调用 LLM 对较旧对话轮次生成摘要。
 
     🎯 严格仿 core/services/query_understanding.py:analyze 的模式：
-        provider.chat(messages, temperature=0, runtime_config=...)
-        任何异常都降级保留 existingSummary，绝不抛、绝不丢摘要。
-
-    Args:
-        provider: 具有 .chat(messages, model, temperature, runtime_config) → ChatResponse 的对象
-        older_turns: 待压缩的较旧对话轮次
-        existing_summary: 已有摘要（增量合并用）
-        config: 含 enabled, summary_max_chars, model 等
-        runtime_config: 透传（用户模型覆盖等）
-
-    Returns:
-        摘要文本；异常/空响应时返回 existing_summary。
+        prompt | get_chat_model(...) | StrOutputParser()
+        任何异常都降级保留 existing_summary，绝不抛、绝不丢摘要。
     """
     if not config.get("enabled", True) or not older_turns:
         return existing_summary
@@ -216,13 +322,29 @@ def summarize_turns(
             existing_summary,
             max_chars=max_chars,
         )
-        resp = provider.chat(
-            messages,
-            model=config.get("model"),
+
+        lc_prompt_messages = []
+        for m in messages:
+            role = m["role"]
+            content = m["content"]
+            if role == "system":
+                lc_prompt_messages.append(SystemMessage(content=content))
+            elif role == "assistant":
+                lc_prompt_messages.append(AIMessage(content=content))
+            else:
+                lc_prompt_messages.append(HumanMessage(content=content))
+
+        prompt = ChatPromptTemplate.from_messages(lc_prompt_messages)
+        model_name = config.get("model")
+        chat_model = get_chat_model(
+            model=model_name,
             temperature=0.0,
             runtime_config=runtime_config,
         )
-        text = (resp.content or "").strip()
+
+        chain = prompt | chat_model | StrOutputParser()
+        text = chain.invoke({})
+        text = (text or "").strip()
         if not text:
             return existing_summary
         return text[:max_chars] if len(text) > max_chars else text

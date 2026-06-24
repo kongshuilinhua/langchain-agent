@@ -1,4 +1,4 @@
-﻿import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
@@ -1646,7 +1646,7 @@ function App() {
         return next;
       });
     }
-    if (['rag_status', 'tool_call', 'memory_used', 'search_status'].includes(event)) {
+    if (['rag_status', 'tool_call', 'memory_used', 'memory_compaction', 'search_status', 'thinking_status'].includes(event)) {
       setToolDebugEvents((items) => [
         ...items,
         {
@@ -5156,7 +5156,13 @@ function debugEventSummary(event) {
     const profile = event.profile_found ? 'profile found' : 'profile missing';
     const summary = event.summary_used ? 'summary used' : 'summary skipped';
     const session = event.session_summary_used ? 'session summary used' : 'session summary skipped';
-    return `${enabled} · ${profile} · ${summary} · facts ${event.facts_count ?? 0} · prefs ${(event.preferences_keys || []).length} · ${session}`;
+    return `${enabled} · ${profile} · ${summary} · facts ${event.facts_recalled ?? '-'}/${event.facts_total ?? event.facts_count ?? 0} · prefs ${(event.preferences_keys || []).length} · ${session}`;
+  }
+  if (event.event === 'memory_compaction') {
+    if (!event.triggered) return '未触发 · 在 token 预算内';
+    const degraded = event.degraded ? ' · 降级(保留旧摘要)' : '';
+    const model = event.summarizer_model || '默认模型';
+    return `压缩 ${event.older_turns ?? 0} 轮 · 保留 ${event.kept_turns ?? 0} 轮 · ${event.tokens_before ?? '-'}→${event.tokens_after ?? '-'} tok · ${model}${degraded} · ${event.latency_ms ?? '-'}ms`;
   }
   if (event.event === 'thinking_status') {
     if (event.enabled) {

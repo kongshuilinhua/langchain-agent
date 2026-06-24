@@ -36,7 +36,12 @@ function normalizeMemoryProfile(profile, agentId = null) {
     agent_id: profile?.agent_id ?? agentId,
     enabled: Boolean(profile?.enabled),
     summary: String(profile?.summary || ''),
-    facts: Array.isArray(profile?.facts) ? profile.facts.map((item) => String(item)).filter(Boolean) : [],
+    facts: Array.isArray(profile?.facts) ? profile.facts.map((item) => {
+      if (item && typeof item === 'object' && 'text' in item) {
+        return String(item.text);
+      }
+      return String(item);
+    }).filter(Boolean) : [],
     preferences: isPlainObject(profile?.preferences) ? profile.preferences : {},
     updated_at: profile?.updated_at || null,
   };

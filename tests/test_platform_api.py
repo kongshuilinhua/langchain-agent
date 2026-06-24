@@ -466,8 +466,17 @@ def test_memory_profile_schema_and_compat_migration(client, auth_headers):
         db.close()
 
     with engine.begin() as connection:
-        connection.execute(text("ALTER TABLE agent_memory_profiles DROP COLUMN IF EXISTS preferences"))
-        connection.execute(text("ALTER TABLE agent_memory_profiles DROP COLUMN IF EXISTS updated_at"))
+        dialect_name = engine.dialect.name
+        if dialect_name == "mysql":
+            inspector = inspect(engine)
+            existing = {col["name"] for col in inspector.get_columns("agent_memory_profiles")}
+            if "preferences" in existing:
+                connection.execute(text("ALTER TABLE agent_memory_profiles DROP COLUMN preferences"))
+            if "updated_at" in existing:
+                connection.execute(text("ALTER TABLE agent_memory_profiles DROP COLUMN updated_at"))
+        else:
+            connection.execute(text("ALTER TABLE agent_memory_profiles DROP COLUMN IF EXISTS preferences"))
+            connection.execute(text("ALTER TABLE agent_memory_profiles DROP COLUMN IF EXISTS updated_at"))
 
     init_db()
     migrated_columns = {column["name"] for column in inspect(engine).get_columns("agent_memory_profiles")}
@@ -1804,7 +1813,13 @@ def test_memory_profile_crud_normalizes_and_deletes_current_user_profile(client,
     profile = patched.json()["profile"]
     assert profile["enabled"] is True
     assert len(profile["summary"]) == 4000
-    assert profile["facts"] == [f"fact-{index}" for index in range(50)]
+    assert len(profile["facts"]) == 50
+    for index, fact in enumerate(profile["facts"]):
+        assert fact["text"] == f"fact-{index}"
+        assert len(fact["id"]) == 8
+        assert fact["source"] == "user"
+        assert fact["score"] == 1.0
+        assert "created_at" in fact
     assert profile["preferences"]["language"] == "zh-CN"
     assert profile["preferences"]["answer_style"] == "concise"
     assert "bad_object" not in profile["preferences"]
@@ -1889,6 +1904,8 @@ def test_chat_emits_memory_used_and_injects_enabled_profile_only(client, auth_he
         "profile_found": True,
         "summary_used": True,
         "facts_count": 1,
+        "facts_total": 1,
+        "facts_recalled": 0,
         "preferences_keys": ["answer_style", "language"],
         "session_summary_used": False,
     }
@@ -2679,3 +2696,37 @@ def test_agent_detail_includes_query_understanding(client, auth_headers):
     qu = detail.json()["agent"]["query_understanding"]
     assert qu["enabled"] is True
     assert qu["confidence_threshold"] == 0.5
+
+
+def test_session_memory_async_compression(client, auth_headers):
+    agent = client.post(
+        "/api/agents",
+        headers=auth_headers,
+        json={
+            "name": "Async Memory Agent",
+            "memory": {"enabled": True, "strategy": "session_summary", "max_messages": 6},
+        },
+    )
+    assert agent.status_code == 200
+    agent_id = agent.json()["agent"]["id"]
+    res = client.post(
+        f"/api/agents/{agent_id}/chat/stream",
+        headers=auth_headers,
+        json={"message": "hello memory", "mode": "draft"},
+    )
+    assert res.status_code == 200
+    assert "event: done" in res.text
+    sessions = client.get(f"/api/agents/{agent_id}/sessions", headers=auth_headers).json()["items"]
+    session_id = sessions[0]["id"]
+    from core.db.session import SessionLocal
+    from core.db.models import SessionMemory
+    import json
+    db = SessionLocal()
+    try:
+        memory = db.query(SessionMemory).filter(SessionMemory.session_id == session_id).first()
+        assert memory is not None
+        data = json.loads(memory.summary)
+        assert len(data["turns"]) == 1
+        assert data["turns"][0]["user"] == "hello memory"
+    finally:
+        db.close()

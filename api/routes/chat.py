@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from collections.abc import Iterable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -27,7 +27,7 @@ from core.db.models import (
     WorkspaceMember,
 )
 from core.db.session import get_db
-from core.runtime.workflow import WorkflowRunner
+from core.runtime.workflow import WorkflowRunner, compact_session_memory_task
 from core.security.permissions import can_manage
 
 import json
@@ -99,7 +99,7 @@ def get_or_create_session(db: Session, agent: Agent, user_id: int, session_id: i
     return session
 
 
-def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatRequest) -> Iterable[str]:
+def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatRequest, background_tasks: BackgroundTasks) -> Iterable[str]:
     run = None
     try:
         session = get_or_create_session(db, agent, user_id, request.session_id, request.message, is_debug=getattr(request, "is_debug", False))
@@ -115,6 +115,7 @@ def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatReq
             rag_options=request.rag_options.model_dump(exclude_none=True) if request.rag_options else None,
             thinking_enabled=request.thinking_enabled, search_enabled=request.search_enabled,
             attachments=request.attachments,
+            async_memory=True,
         ):
             if event["event"] == "token":
                 yield sse_event("token", {"content": event.get("content", "")})
@@ -127,6 +128,8 @@ def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatReq
                 run = event["run"]
                 answer = event["answer"]
                 sources = event["sources"]
+            elif event["event"] == "memory_compaction":
+                yield sse_event("memory_compaction", event["data"])
         if sources:
             yield sse_event("sources", {"items": sources})
         assistant = Message(session_id=session.id, role="assistant", content=answer, sources=sources)
@@ -134,6 +137,16 @@ def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatReq
         db.commit()
         db.refresh(assistant)
         yield sse_event("done", {"session_id": session.id, "message_id": assistant.id, "run_id": run.id, "content": answer})
+
+        if runner.runtime and getattr(runner.runtime, "settings", {}).get("memory", {}).get("enabled"):
+            background_tasks.add_task(
+                compact_session_memory_task,
+                session_id=session.id,
+                user_message=request.message,
+                answer=answer,
+                max_messages=int(runner.runtime.settings.get("memory", {}).get("max_messages", 12)),
+                runtime_config=runner.runtime.runtime_config,
+            )
     except Exception as exc:
         if run is not None:
             try:
@@ -149,10 +162,10 @@ def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatReq
 # ── Chat Stream ──
 
 @router.post("/api/agents/{agent_id}/chat/stream")
-def chat_stream(agent_id: int, request: ChatRequest, membership: WorkspaceMember = Depends(get_current_membership), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def chat_stream(agent_id: int, request: ChatRequest, background_tasks: BackgroundTasks, membership: WorkspaceMember = Depends(get_current_membership), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     agent = require_workspace_agent(db, membership.workspace_id, agent_id)
     require_agent_read_access(agent, membership)
-    return StreamingResponse(stream_chat_events(db, agent, current_user.id, request), media_type="text/event-stream")
+    return StreamingResponse(stream_chat_events(db, agent, current_user.id, request, background_tasks), media_type="text/event-stream")
 
 
 # ── Sessions ──

@@ -14,6 +14,26 @@ def client(monkeypatch):
         pytest.skip("Test database required. Set TEST_DATABASE_URL.")
 
     _terminate_database_connections(database_url)
+    
+    # For MySQL, terminate other active connections to prevent metadata lock hangs during DROP TABLE
+    url = make_url(database_url)
+    if url.get_dialect().name == "mysql":
+        try:
+            temp_engine = create_engine(database_url, future=True)
+            with temp_engine.connect() as conn:
+                cur_id = conn.execute(text("SELECT CONNECTION_ID()")).scalar()
+                processes = conn.execute(text("SHOW PROCESSLIST")).fetchall()
+                for p in processes:
+                    p_id = p[0]
+                    if p_id != cur_id:
+                        try:
+                            conn.execute(text(f"KILL {p_id}"))
+                        except Exception:
+                            pass
+            temp_engine.dispose()
+        except Exception:
+            pass
+
     engine = create_engine(database_url, future=True)
     try:
         with engine.begin() as connection:
@@ -109,3 +129,12 @@ def owner_token(client):
 @pytest.fixture()
 def auth_headers(owner_token):
     return {"Authorization": f"Bearer {owner_token}"}
+
+
+@pytest.fixture(autouse=True)
+def run_background_tasks_synchronously(monkeypatch):
+    from fastapi import BackgroundTasks
+    def mock_add_task(self, func, *args, **kwargs):
+        func(*args, **kwargs)
+    monkeypatch.setattr(BackgroundTasks, "add_task", mock_add_task)
+

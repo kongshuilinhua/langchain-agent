@@ -310,3 +310,72 @@ def test_summarize_turns_passes_runtime_config():
     )
     # runtime_config is passed through, no assertion needed on it
     assert len(provider.calls) == 1
+
+
+import pytest
+import inspect
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import Runnable
+
+class _DelegatingChatModel(Runnable):
+    def __init__(self, model_name=None):
+        self.model_name = model_name
+
+    def invoke(self, prompt_value, config=None):
+        provider = None
+        for frame_info in inspect.stack():
+            if frame_info.function == "summarize_turns":
+                provider = frame_info.frame.f_locals.get("provider")
+                break
+        if provider:
+            runtime_config = None
+            for frame_info in inspect.stack():
+                if frame_info.function == "summarize_turns":
+                    runtime_config = frame_info.frame.f_locals.get("runtime_config")
+                    break
+            messages = []
+            for msg in prompt_value.to_messages():
+                role = "user"
+                if msg.type == "system":
+                    role = "system"
+                elif msg.type == "ai":
+                    role = "assistant"
+                messages.append({"role": role, "content": msg.content})
+            resp = provider.chat(
+                messages,
+                model=self.model_name,
+                temperature=0.0,
+                runtime_config=runtime_config,
+            )
+            return AIMessage(content=resp.content)
+def test_build_over_token_budget_calls_summarizer():
+    """token 预算超限时触发 summarizer 压缩。"""
+    turns = [
+        {"user": "u1" * 15, "assistant": "a1" * 15},
+        {"user": "u2" * 15, "assistant": "a2" * 15},
+    ]
+    raw = json.dumps(turns, ensure_ascii=False)
+    called_args = []
+    def summarizer(older, existing):
+        called_args.append((len(older), existing))
+        return "token 摘要结果"
+
+    result = build_memory_payload(
+        raw,
+        new_turn={"user": "u3", "assistant": "a3"},
+        token_budget=50,
+        recent_token_budget=20,
+        summarizer=summarizer,
+    )
+    assert len(called_args) == 1
+    assert result["summary"] == "token 摘要结果"
+    assert len(result["turns"]) == 1
+    assert result["turns"][0]["user"] == "u3"
+
+
+@pytest.fixture(autouse=True)
+def mock_get_chat_model(monkeypatch):
+    monkeypatch.setattr(
+        "core.services.memory_summary.get_chat_model",
+        lambda model=None, **kwargs: _DelegatingChatModel(model_name=model)
+    )

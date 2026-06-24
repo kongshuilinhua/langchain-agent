@@ -25,8 +25,13 @@ from core.integrations.llm import OpenAICompatibleProvider
 from core.services.agents import get_agent_detail, normalize_memory, normalize_rag, normalize_tool_policy, normalize_query_understanding
 from core.services import query_understanding as qu_service
 from core.services.rag import retrieve
-from core.services.memory import format_profile_memory, get_memory_profile, memory_used_event
+from core.services.memory import format_profile_memory, get_memory_profile, memory_used_event, recall_profile_memory, recall_facts
 from core.services.memory_summary import build_memory_payload, parse_memory, summarize_turns
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
+try:
+    from langchain_core.messages.utils import count_tokens_approximately
+except ImportError:
+    count_tokens_approximately = lambda msgs: sum(len(m.content) for m in msgs) // 2
 from core.services.models import resolve_agent_model
 from core.services.tools import execute_tool, tool_call_event, tool_schema_for_llm
 from core.services.uploads import get_workspace_uploads
@@ -95,6 +100,7 @@ class WorkflowRunner:
             SQLAlchemy 事务边界（db.commit），确保即使中间某个节点崩溃，前面的运行步骤依旧能持久化，为系统可观测性留下链路 Trace。
         """
         runtime = self._runtime_agent(agent, mode, chat_session.user_id)
+        self.runtime = runtime
         upload_ids = [str(item.get("id")) for item in attachments or [] if item.get("id")]
         uploads = get_workspace_uploads(self.db, workspace_id=agent.workspace_id, upload_ids=upload_ids)
         self._validate_model_capabilities(runtime.capability_config, uploads)
@@ -120,8 +126,6 @@ class WorkflowRunner:
             user_id=chat_session.user_id,
             agent_id=agent.id,
         )
-        profile_memory_text = format_profile_memory(profile_memory)
-        profile_memory_event = memory_used_event(profile_memory, session_summary_used=bool(memory and memory.summary))
         
         # 统一工作流环境上下文对象（The Single Source of Truth）
         context: dict = {
@@ -131,8 +135,8 @@ class WorkflowRunner:
             "draft": "",
             "variables": self._merge_variables(runtime.settings.get("variables", []), variables or {}),
             "memory_summary": memory.summary if memory else "",
-            "profile_memory": profile_memory_text,
-            "profile_memory_used": profile_memory_event,
+            "profile_memory": "",
+            "profile_memory_used": {},
             "memory_enabled": normalize_memory(runtime.settings.get("memory")).get("enabled", False),
             "rag_enabled": effective_rag_enabled,
             **({"rag_enabled_request": rag_enabled} if rag_enabled is not None else {}),
@@ -146,6 +150,30 @@ class WorkflowRunner:
             "uploads": uploads,
         }
         self._understand_query(runtime, context)
+
+        # 在查询理解完成后，利用 rewritten_query 做长期画像记忆的向量检索
+        from core.config import get_settings
+        settings = get_settings()
+        query = context.get("rewritten_query") or context["input"]
+        # 🎯 同一回合只召回一次：facts 复用于 prompt 装配与观测事件，避免重复 embedding + 检索
+        recalled_facts = recall_facts(
+            profile_memory,
+            query=query,
+            k=settings.memory_recall_top_k,
+        )
+        profile_memory_text = recall_profile_memory(
+            profile_memory,
+            query=query,
+            k=settings.memory_recall_top_k,
+            facts=recalled_facts,
+        )
+        profile_memory_event = memory_used_event(
+            profile_memory,
+            session_summary_used=bool(memory and memory.summary),
+            recalled_facts=recalled_facts,
+        )
+        context["profile_memory"] = profile_memory_text
+        context["profile_memory_used"] = profile_memory_event
         steps: list[dict] = []
 
         # 串行调度执行每个图节点元数据
@@ -179,9 +207,10 @@ class WorkflowRunner:
             )
 
         final_answer = context.get("answer") or context.get("draft") or "当前智能体没有生成回答。"
-        # 若开启了会话上下文记忆，异步将其打包并截断更新
+        # 若开启了会话上下文记忆，同步将其打包并截断更新
         if context.get("memory_enabled"):
-            self._update_session_memory(
+            compact_session_memory(
+                self.db,
                 chat_session.id,
                 user_message,
                 final_answer,
@@ -206,6 +235,7 @@ class WorkflowRunner:
         thinking_enabled: bool | None = None,
         search_enabled: bool | None = None,
         attachments: list[dict] | None = None,
+        async_memory: bool = False,
     ):
         """
         流式生成器执行工作流（SSE Streaming Event Generator）。
@@ -214,7 +244,7 @@ class WorkflowRunner:
             - 利用 Python 的 `yield` 机制，在长达几分钟的智能体链条中，将中间进度以细粒度事件实时推送。
             - 包含三类流式事件：
               1. `step`: 指示某个工作流节点开始/结束，并附带状态数据。
-              2. `token`: 大模型实时打字流，用于 C 端界面渲染。
+              2. `token`: 大模型实时打字流，用于 C端 界面渲染。
               3. `complete`: 整个 Run 链路圆满收官，输出完整持久化的实体与最终回答。
         """
         runtime, run, context = self._start_run(
@@ -229,6 +259,7 @@ class WorkflowRunner:
             search_enabled=search_enabled,
             attachments=attachments,
         )
+        self.runtime = runtime
         steps: list[dict] = []
         for node in runtime.workflow:
             if node["type"] == "LLM":
@@ -253,8 +284,10 @@ class WorkflowRunner:
             yield {"event": "step", "step": step_payload}
 
         final_answer = context.get("answer") or context.get("draft") or "当前智能体没有生成回答。"
-        if context.get("memory_enabled"):
-            self._update_session_memory(
+        compaction_event = None
+        if context.get("memory_enabled") and not async_memory:
+            compaction_event = compact_session_memory(
+                self.db,
                 chat_session.id,
                 user_message,
                 final_answer,
@@ -271,6 +304,13 @@ class WorkflowRunner:
             "sources": self._public_sources(context),
             "steps": steps,
         }
+        if compaction_event:
+            compaction_event_copy = dict(compaction_event)
+            compaction_event_copy.pop("older_turns_list", None)
+            yield {
+                "event": "memory_compaction",
+                "data": compaction_event_copy,
+            }
 
     def _start_run(
         self,
@@ -312,8 +352,6 @@ class WorkflowRunner:
             user_id=chat_session.user_id,
             agent_id=agent.id,
         )
-        profile_memory_text = format_profile_memory(profile_memory)
-        profile_memory_event = memory_used_event(profile_memory, session_summary_used=bool(memory and memory.summary))
         context: dict = {
             "input": user_message,
             "sources": [],
@@ -321,8 +359,8 @@ class WorkflowRunner:
             "draft": "",
             "variables": self._merge_variables(runtime.settings.get("variables", []), variables or {}),
             "memory_summary": memory.summary if memory else "",
-            "profile_memory": profile_memory_text,
-            "profile_memory_used": profile_memory_event,
+            "profile_memory": "",
+            "profile_memory_used": {},
             "memory_enabled": normalize_memory(runtime.settings.get("memory")).get("enabled", False),
             "rag_enabled": effective_rag_enabled,
             **({"rag_enabled_request": rag_enabled} if rag_enabled is not None else {}),
@@ -336,6 +374,31 @@ class WorkflowRunner:
             "uploads": uploads,
         }
         self._understand_query(runtime, context)
+
+        # 在查询理解完成后，利用 rewritten_query 做长期画像记忆的向量检索
+        from core.config import get_settings
+        settings = get_settings()
+        query = context.get("rewritten_query") or context["input"]
+        # 🎯 同一回合只召回一次：facts 复用于 prompt 装配与观测事件，避免重复 embedding + 检索
+        recalled_facts = recall_facts(
+            profile_memory,
+            query=query,
+            k=settings.memory_recall_top_k,
+        )
+        profile_memory_text = recall_profile_memory(
+            profile_memory,
+            query=query,
+            k=settings.memory_recall_top_k,
+            facts=recalled_facts,
+        )
+        profile_memory_event = memory_used_event(
+            profile_memory,
+            session_summary_used=bool(memory and memory.summary),
+            recalled_facts=recalled_facts,
+        )
+        context["profile_memory"] = profile_memory_text
+        context["profile_memory_used"] = profile_memory_event
+
         return runtime, run, context
 
     def _persist_step(self, run: Run, node: dict, user_message: str, output: dict) -> RunStep:
@@ -1001,52 +1064,192 @@ class WorkflowRunner:
     def _session_memory(self, session_id: int) -> SessionMemory | None:
         return self.db.query(SessionMemory).filter(SessionMemory.session_id == session_id).first()
 
-    def _update_session_memory(self, session_id: int, user_message: str, answer: str,
-                               max_messages: int, runtime_config: dict | None = None) -> None:
-        """
-        高可用、可截断、智能向后兼容的历史会话记忆归集器（B1：窗口 + LLM 增量摘要）。
 
-        🎯 意图与工程大局观：
-            记忆的膨胀是导致 Agent 随着对话轮次加深逐渐失去精度（或发生高额费用）的罪魁祸首。
-            采用 `最近窗口 + 旧轮次 LLM 增量摘要` 方案：
-            - 未超 `max_turns` 时，等价于现有滑动窗口，仅扁平存最近轮次。
-            - 超阈值时，把较旧轮次交 `summarize_turns` 压成增量摘要，仅保留最近 `keep_recent` 轮原文，
-              产出结构化载荷 `{"summary": ..., "turns": [...]}` 落库。
+def compact_session_memory(
+    db: Session,
+    session_id: int,
+    user_message: str,
+    answer: str,
+    max_messages: int,
+    runtime_config: dict | None = None,
+) -> dict:
+    """
+    模块级的会话记忆压缩函数，移出主请求链路，支持乐观锁重试与返回 compaction_event。
+    """
+    import logging
+    import time
+    from core.integrations.llm import OpenAICompatibleProvider
 
-        🛡️ 防御性编程与大模型兜底：
-            - **向后兼容**：`build_memory_payload` 经 `parse_memory` 兼容解析新 dict / 旧 JSON list /
-              旧 `\n===\n` 文本三种历史格式，绝不因存量会话格式差异而丢失记忆。
-            - **摘要降级红线**：摘要 LLM 调用任何异常都降级保留旧摘要（绝不抛、绝不丢），主对话不受影响。
-            - **大响应截断保护**：序列化超 2000 字节时对 assistant 文本限幅 500 字，斩断「大回答塞死后续对话」。
-        """
-        settings = get_settings()
-        memory = self._session_memory(session_id)
+    logger = logging.getLogger(__name__)
+    start_time = time.perf_counter()
+    settings = get_settings()
+
+    triggered = False
+    older_turns_count = 0
+    kept_turns_count = 0
+    tokens_before = 0
+    tokens_after = 0
+    degraded = False
+    summarizer_model = settings.memory_summary_model or settings.openai_model
+
+    for attempt in range(2):
+        memory = db.query(SessionMemory).filter(SessionMemory.session_id == session_id).first()
         if not memory:
-            memory = SessionMemory(session_id=session_id, summary="", message_count=0)
-            self.db.add(memory)
-        memory.message_count += 2
+            try:
+                memory = SessionMemory(session_id=session_id, summary="", message_count=0, version=0)
+                db.add(memory)
+                db.commit()
+                db.refresh(memory)
+            except Exception:
+                db.rollback()
+                memory = db.query(SessionMemory).filter(SessionMemory.session_id == session_id).first()
+                if not memory:
+                    logger.warning("Failed to get or create SessionMemory for session %d", session_id)
+                    return {"triggered": False}
 
-        # max_messages = message count, convert to turn count
+        old_version = memory.version
+        old_summary = memory.summary
+
+        _, parsed_turns = parse_memory(old_summary)
+        last_turn = parsed_turns[-1] if parsed_turns else None
+        is_duplicate = (
+            last_turn is not None
+            and last_turn.get("user") == user_message.strip()
+            and last_turn.get("assistant") == answer.strip()
+        )
+
+        if is_duplicate:
+            payload = {"summary": memory.summary, "turns": parsed_turns}
+            triggered = False
+            break
+
         max_turns = max(1, max_messages // 2)
-        keep_recent = settings.memory_keep_recent_turns
-
         summary_config = {
             "enabled": settings.memory_summary_enabled,
             "summary_max_chars": settings.memory_summary_max_chars,
+            "model": settings.memory_summary_model,
         }
 
-        provider = self.provider
+        provider = OpenAICompatibleProvider()
+        summarizer_failed = False
+        captured_older = []
+
+        def summarizer_wrapper(older, existing):
+            nonlocal triggered, older_turns_count, summarizer_failed, captured_older
+            triggered = True
+            older_turns_count = len(older)
+            captured_older = older
+            try:
+                res = summarize_turns(
+                    provider,
+                    older_turns=older,
+                    existing_summary=existing,
+                    config=summary_config,
+                    runtime_config=runtime_config,
+                )
+                return res
+            except Exception as e:
+                summarizer_failed = True
+                raise e
+
         payload = build_memory_payload(
-            memory.summary or "",
+            old_summary,
             new_turn={"user": user_message.strip(), "assistant": answer.strip()},
+            token_budget=settings.memory_token_budget,
+            recent_token_budget=settings.memory_recent_token_budget,
             max_turns=max_turns,
-            keep_recent=keep_recent,
-            summarizer=lambda older, existing: summarize_turns(
-                provider,
-                older_turns=older,
-                existing_summary=existing,
-                config=summary_config,
-                runtime_config=runtime_config,
-            ),
+            keep_recent=settings.memory_keep_recent_turns,
+            summarizer=summarizer_wrapper,
         )
-        memory.summary = json.dumps(payload, ensure_ascii=False)
+
+        if summarizer_failed:
+            degraded = True
+
+        kept_turns_count = len(payload.get("turns", []))
+
+        _, raw_turns = parse_memory(old_summary)
+        all_turns = raw_turns + [{"user": user_message.strip(), "assistant": answer.strip()}]
+        lc_msgs_before = []
+        for t in all_turns:
+            u = t.get("user") or ""
+            a = t.get("assistant") or ""
+            if u:
+                lc_msgs_before.append(HumanMessage(content=u))
+            if a:
+                lc_msgs_before.append(AIMessage(content=a))
+        tokens_before = count_tokens_approximately(lc_msgs_before)
+
+        lc_msgs_after = []
+        for t in payload.get("turns", []):
+            u = t.get("user") or ""
+            a = t.get("assistant") or ""
+            if u:
+                lc_msgs_after.append(HumanMessage(content=u))
+            if a:
+                lc_msgs_after.append(AIMessage(content=a))
+        if payload.get("summary"):
+            lc_msgs_after.append(SystemMessage(content=payload["summary"]))
+        tokens_after = count_tokens_approximately(lc_msgs_after)
+
+        rows_updated = db.query(SessionMemory).filter(
+            SessionMemory.session_id == session_id,
+            SessionMemory.version == old_version
+        ).update({
+            "summary": json.dumps(payload, ensure_ascii=False),
+            "message_count": SessionMemory.message_count + 2,
+            "version": SessionMemory.version + 1,
+            "updated_at": datetime.now()
+        }, synchronize_session=False)
+        db.commit()
+
+        if rows_updated > 0:
+            break
+        else:
+            db.rollback()
+            if attempt == 1:
+                logger.warning(
+                    f"SessionMemory concurrency update failed for session {session_id} after retry. Abandoning compression."
+                )
+
+    latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+    compaction_event = {
+        "triggered": triggered,
+        "older_turns": older_turns_count,
+        "older_turns_list": captured_older,
+        "kept_turns": kept_turns_count,
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "summarizer_model": summarizer_model,
+        "degraded": degraded,
+        "latency_ms": latency_ms
+    }
+    return compaction_event
+
+
+def compact_session_memory_task(
+    session_id: int,
+    user_message: str,
+    answer: str,
+    max_messages: int,
+    runtime_config: dict | None = None,
+):
+    """
+    FastAPI 后台任务专用的包装器，新开 db Session 并在结束时关闭。
+    """
+    from core.db.session import SessionLocal
+    from core.runtime.memory_pipeline import run_memory_pipeline
+    db = SessionLocal()
+    try:
+        run_memory_pipeline(
+            db=db,
+            session_id=session_id,
+            user_message=user_message,
+            answer=answer,
+            max_messages=max_messages,
+            runtime_config=runtime_config,
+        )
+    except Exception as e:
+        logger.warning(f"SessionMemory background compaction failed: {e}")
+    finally:
+        db.close()

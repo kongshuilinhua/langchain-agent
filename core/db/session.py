@@ -448,6 +448,13 @@ def _run_compat_migrations() -> None:
                 "is_debug": "BOOLEAN DEFAULT false",
             },
         )
+    if "session_memory" in table_names:
+        _ensure_columns(
+            "session_memory",
+            {
+                "version": "INTEGER DEFAULT 0",
+            },
+        )
 
 
 def get_db():
@@ -499,6 +506,11 @@ def _ensure_columns(table_name: str, columns: dict[str, str]) -> None:
         ddl_type = ddl.split()[0].upper() if ddl else ""
         if ddl_type not in _VALID_DDL_TYPES:
             raise ValueError(f"Unsupported DDL type for column {column_name}: {ddl_type}")
+        
+        # MySQL doesn't support DEFAULT value for JSON, TEXT, BLOB columns during ALTER TABLE
+        if engine.dialect.name == "mysql" and ddl_type in ("JSON", "TEXT"):
+            ddl = re.sub(r"\bDEFAULT\s+('[^']*'|[^ ]+)", "", ddl, flags=re.IGNORECASE).strip()
+
         with engine.begin() as connection:
             connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
 

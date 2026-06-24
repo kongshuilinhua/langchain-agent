@@ -171,6 +171,14 @@ class Settings(BaseSettings):
     memory_summary_max_chars: int = Field(default=800, alias="MEMORY_SUMMARY_MAX_CHARS")
     # 🧠 压缩后保留的最近轮数
     memory_keep_recent_turns: int = Field(default=3, alias="MEMORY_KEEP_RECENT_TURNS")
+    # 🧠 摘要使用的独立廉价模型
+    memory_summary_model: str | None = Field(default=None, alias="MEMORY_SUMMARY_MODEL")
+    # 🧠 会话记忆总 token 预算与最近窗口 token 预算
+    memory_token_budget: int = Field(default=3000, alias="MEMORY_TOKEN_BUDGET")
+    memory_recent_token_budget: int = Field(default=1500, alias="MEMORY_RECENT_TOKEN_BUDGET")
+    # 🧠 长期记忆自动抽取开关与向量召回 Top-K
+    memory_long_term_extract_enabled: bool = Field(default=False, alias="MEMORY_LONG_TERM_EXTRACT")
+    memory_recall_top_k: int = Field(default=5, alias="MEMORY_RECALL_TOP_K")
 
     # ── 存储路径 ────────────────────────────────────────────────
     data_dir: Path = Path("data")

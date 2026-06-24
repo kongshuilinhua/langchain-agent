@@ -115,13 +115,22 @@ def delete_memory_profile(
     return True
 
 
-def memory_used_event(profile: AgentMemoryProfile | None, *, session_summary_used: bool) -> dict:
+def memory_used_event(
+    profile: AgentMemoryProfile | None,
+    *,
+    session_summary_used: bool,
+    recalled_facts: list[dict] | None = None,
+) -> dict:
     """生成高级 Trace 看板中关于“长短期记忆使用指标”的事件包。"""
+    facts = normalize_facts(profile.facts) if profile and profile.enabled else []
+    recalled = recalled_facts if recalled_facts is not None else facts
     return {
         "enabled": bool(profile.enabled) if profile else False,
         "profile_found": bool(profile),
         "summary_used": bool(profile and profile.enabled and (profile.summary or "").strip()),
-        "facts_count": len(normalize_facts(profile.facts)) if profile and profile.enabled else 0,
+        "facts_count": len(facts),
+        "facts_total": len(facts),
+        "facts_recalled": len(recalled),
         "preferences_keys": sorted(normalize_preferences(profile.preferences).keys()) if profile and profile.enabled else [],
         "session_summary_used": bool(session_summary_used),
     }
@@ -140,7 +149,7 @@ def format_profile_memory(profile: AgentMemoryProfile | None) -> str:
         parts.append(f"Long-term memory summary:\n{summary}")
     facts = normalize_facts(profile.facts)
     if facts:
-        parts.append("Long-term memory facts:\n" + "\n".join(f"- {item}" for item in facts))
+        parts.append("Long-term memory facts:\n" + "\n".join(f"- {item['text']}" for item in facts))
     preferences = normalize_preferences(profile.preferences)
     if preferences:
         lines = [f"- {key}: {value}" for key, value in sorted(preferences.items())]
@@ -153,16 +162,135 @@ def normalize_summary(value) -> str:
     return str(value or "").strip()[:MAX_MEMORY_SUMMARY_CHARS]
 
 
-def normalize_facts(value) -> list[str]:
-    """规整并截断长效事实条数。"""
+def normalize_facts(value) -> list[dict]:
+    """
+    🧹 规整并衰减排序长效记忆事实列表。
+    支持输入字符串列表或字典列表，处理字段补全、去重合并与时间衰减排序，最后截断保留前 50 条。
+    """
     if not isinstance(value, list):
         return []
-    facts = []
+
+    import re
+    import uuid
+
+    current_time = datetime.now(timezone.utc)
+    validated_items = []
+
+    # 1. 字段格式化与有效性校验 🛡️
     for item in value:
-        text = str(item or "").strip()
-        if text:
-            facts.append(text)
-    return facts[:MAX_MEMORY_FACTS]
+        if isinstance(item, str):
+            clean_text = item.strip()
+            if not clean_text:
+                continue
+            validated_items.append({
+                "id": uuid.uuid4().hex[:8],
+                "text": clean_text,
+                "source": "user",
+                "created_at": current_time.isoformat(),
+                "score": 1.0,
+            })
+        elif isinstance(item, dict):
+            # 避免直接修改入参对象
+            item_copy = dict(item)
+            
+            # 校验并清洗 text 字段
+            text_val = item_copy.get("text")
+            if text_val is None:
+                continue
+            clean_text = str(text_val).strip()
+            if not clean_text:
+                continue
+            item_copy["text"] = clean_text
+
+            # 校验并补全 id 字段
+            id_val = item_copy.get("id")
+            if not isinstance(id_val, str) or not id_val.strip():
+                item_copy["id"] = uuid.uuid4().hex[:8]
+            else:
+                item_copy["id"] = id_val.strip()
+
+            # 校验并补全 source 字段
+            source_val = item_copy.get("source")
+            if not isinstance(source_val, str) or not source_val.strip():
+                item_copy["source"] = "user"
+            else:
+                item_copy["source"] = source_val.strip()
+
+            # 校验并补全 created_at 字段
+            created_at_val = item_copy.get("created_at")
+            try:
+                if isinstance(created_at_val, str):
+                    dt = datetime.fromisoformat(created_at_val)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    item_copy["created_at"] = dt.isoformat()
+                else:
+                    raise ValueError()
+            except Exception:
+                item_copy["created_at"] = current_time.isoformat()
+
+            # 校验并补全 score 字段
+            score_val = item_copy.get("score")
+            try:
+                score_float = float(score_val)
+                # 约束 score 范围在 0.0 到 1.0 之间
+                if score_float < 0.0 or score_float > 1.0:
+                    score_float = 1.0
+                item_copy["score"] = score_float
+            except (ValueError, TypeError):
+                item_copy["score"] = 1.0
+
+            validated_items.append(item_copy)
+
+    # 2. 文本去重与合并 (Deduplication) 🔄
+    # 规则：统一转换为小写，去除非字母、数字 and 中文字符
+    seen = {}  # normalized_key -> item
+    unique_items = []
+
+    def _normalize_text_key(text: str) -> str:
+        text_lower = text.lower()
+        # 移除非英文、非数字、非中文的字符
+        return re.sub(r"[^a-z0-9\u3400-\u4dbf\u4e00-\u9fff]", "", text_lower)
+
+    for item in validated_items:
+        key = _normalize_text_key(item["text"])
+        if key in seen:
+            existing = seen[key]
+            # 更新分数（保留最高分）
+            existing["score"] = max(existing["score"], item["score"])
+            # 更新创建时间（保留较新时间）
+            try:
+                dt_existing = datetime.fromisoformat(existing["created_at"])
+                dt_new = datetime.fromisoformat(item["created_at"])
+                if dt_existing.tzinfo is None:
+                    dt_existing = dt_existing.replace(tzinfo=timezone.utc)
+                if dt_new.tzinfo is None:
+                    dt_new = dt_new.replace(tzinfo=timezone.utc)
+                if dt_new > dt_existing:
+                    existing["created_at"] = item["created_at"]
+            except Exception:
+                pass
+        else:
+            seen[key] = item
+            unique_items.append(item)
+
+    # 3. 衰减打分与排序 (Decay & Sorting) 📉
+    def _calc_decayed_score(item: dict) -> float:
+        try:
+            created_at_time = datetime.fromisoformat(item["created_at"])
+            if created_at_time.tzinfo is None:
+                created_at_time = created_at_time.replace(tzinfo=timezone.utc)
+        except Exception:
+            created_at_time = current_time
+        
+        days_old = (current_time - created_at_time).total_seconds() / 86400.0
+        days_old = max(0.0, days_old)
+        return item["score"] * (0.95 ** days_old)
+
+    unique_items.sort(key=_calc_decayed_score, reverse=True)
+
+    # 4. 截断最多 50 条 ✂️
+    return unique_items[:MAX_MEMORY_FACTS]
 
 
 def normalize_preferences(value) -> dict:
@@ -200,3 +328,147 @@ def normalize_preference_value(value):
                 normalized.append(item)
         return normalized
     return None
+
+
+def get_embeddings_model():
+    """获取 LangChain OpenAI 嵌入模型。"""
+    from langchain_openai import OpenAIEmbeddings
+    from core.config import get_settings
+    from core.integrations.llm import OpenAICompatibleProvider
+
+    settings = get_settings()
+    provider = OpenAICompatibleProvider()
+    return OpenAIEmbeddings(
+        model=settings.openai_embedding_model,
+        base_url=provider._api_base(settings, purpose="embedding"),
+        api_key=provider._api_key(settings, purpose="embedding") or "x",
+        check_embedding_ctx_length=False,
+    )
+
+
+def sync_facts_to_vector_store(profile: AgentMemoryProfile):
+    """
+    同步 facts 到 Milvus 向量库中。
+    1. 删除该租户的所有向量。
+    2. 如果 profile.facts 不为空，则插入当前所有 facts 的向量。
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from langchain_community.vectorstores import Milvus
+        from core.config import get_settings
+        settings = get_settings()
+        embeddings = get_embeddings_model()
+        
+        vectorstore = Milvus(
+            embedding_function=embeddings,
+            collection_name="agent_memory_facts",
+            connection_args={"uri": settings.milvus_uri, "token": settings.milvus_token},
+        )
+        
+        # 1. 删除该租户现有的所有向量
+        expr = f"workspace_id == {profile.workspace_id} and user_id == {profile.user_id} and agent_id == {profile.agent_id}"
+        try:
+            # 如果 collection 还未创建，delete 会报错，静默忽略
+            if vectorstore.col:
+                vectorstore.col.delete(expr)
+        except Exception:
+            pass
+            
+        # 2. 插入当前事实
+        facts = normalize_facts(profile.facts)
+        if not facts:
+            return
+            
+        texts = [fact["text"] for fact in facts]
+        metadatas = [
+            {
+                "workspace_id": profile.workspace_id,
+                "user_id": profile.user_id,
+                "agent_id": profile.agent_id,
+                "fact_id": fact["id"],
+            }
+            for fact in facts
+        ]
+        ids = [fact["id"] for fact in facts]
+        vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+    except Exception as e:
+        logger.warning("Failed to sync facts to vector store: %s", e)
+
+
+def recall_facts(profile: AgentMemoryProfile | None, query: str, k: int) -> list[dict]:
+    """
+    按 query 向量检索 facts 中的 top-k 条。
+    隔离过滤：workspace_id, user_id, agent_id。
+    如果向量库不可用或出错，降级返回 profile.facts 的全量。
+    """
+    if not profile or not profile.enabled:
+        return []
+    all_facts = normalize_facts(profile.facts)
+    if not all_facts:
+        return []
+    if not query.strip():
+        return all_facts[:k]
+        
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from langchain_community.vectorstores import Milvus
+        from core.config import get_settings
+        settings = get_settings()
+        embeddings = get_embeddings_model()
+        
+        vectorstore = Milvus(
+            embedding_function=embeddings,
+            collection_name="agent_memory_facts",
+            connection_args={"uri": settings.milvus_uri, "token": settings.milvus_token},
+        )
+        
+        expr = f"workspace_id == {profile.workspace_id} and user_id == {profile.user_id} and agent_id == {profile.agent_id}"
+        docs = vectorstore.similarity_search(query, k=k, expr=expr)
+        
+        # 仅保留被召回的 facts，顺序与 Milvus 召回顺序一致
+        recalled_texts = [doc.page_content for doc in docs]
+        recalled_facts_dict = {fact["text"]: fact for fact in all_facts}
+        
+        recalled = []
+        for text in recalled_texts:
+            if text in recalled_facts_dict:
+                recalled.append(recalled_facts_dict[text])
+        return recalled
+    except Exception as e:
+        logger.warning("Vector recall failed, falling back to full facts: %s", e)
+        return all_facts
+
+
+def recall_profile_memory(
+    profile: AgentMemoryProfile | None,
+    query: str,
+    k: int = 5,
+    *,
+    facts: list[dict] | None = None,
+) -> str:
+    """
+    召回长期画像记忆：
+    - summary 整体带上
+    - facts 按 query 检索 top-k
+    - preferences 全量带上
+
+    🎯 性能：若调用方已经召回过 facts（如 workflow 同一轮已调 recall_facts 用于观测事件），
+        通过 `facts` 传入复用，避免在同一回合内重复 embedding + 向量检索。
+    """
+    if not profile or not profile.enabled:
+        return ""
+    parts = []
+    summary = (profile.summary or "").strip()
+    if summary:
+        parts.append(f"Long-term memory summary:\n{summary}")
+    facts = recall_facts(profile, query=query, k=k) if facts is None else facts
+    if facts:
+        parts.append("Long-term memory facts:\n" + "\n".join(f"- {item['text']}" for item in facts))
+    preferences = normalize_preferences(profile.preferences)
+    if preferences:
+        lines = [f"- {key}: {value}" for key, value in sorted(preferences.items())]
+        parts.append("Long-term memory preferences:\n" + "\n".join(lines))
+    return "\n\n".join(parts)
+
