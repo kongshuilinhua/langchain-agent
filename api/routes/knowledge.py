@@ -16,6 +16,7 @@ from core.db.session import get_db
 from core.services.knowledge import (
     KnowledgeDocumentError,
     add_document,
+    chunk_document,
     create_knowledge_base,
     delete_document,
     delete_knowledge_base,
@@ -27,8 +28,6 @@ from core.services.knowledge import (
     mark_document_reindexing,
     run_document_ingestion,
     run_kb_reindex,
-    split_by_hierarchy,
-    split_parent_child,
 )
 from core.services.rag_cache import redis_store
 
@@ -56,23 +55,15 @@ class PreviewUploadRequest(ResegmentRequest):
     content_base64: str
 
 
-def _chunks_for_segment(text: str, *, kb_id: int, document_id: int, cfg: dict) -> list[dict]:
-    """按 segment_mode 选择切片器，返回切片列表（预览专用，不落库）。"""
-    seg_mode = cfg.get("segment_mode", "auto")
-    if seg_mode == "hierarchy":
-        return split_by_hierarchy(
-            text, kb_id=kb_id, document_id=document_id,
-            max_level=cfg.get("hierarchy_level", 3),
-            keep_hierarchy_info=cfg.get("keep_hierarchy_info", True),
-        )
-    if seg_mode == "custom":
-        return split_parent_child(
-            text, kb_id=kb_id, document_id=document_id,
-            parent_size=cfg.get("max_chunk_len", 1600),
-            child_size=int(cfg.get("max_chunk_len", 1600) * 0.35),
-            overlap=int(cfg.get("max_chunk_len", 1600) * cfg.get("overlap_pct", 10) / 100),
-        )
-    return split_parent_child(text, kb_id=kb_id, document_id=document_id)
+def _chunks_for_segment(text: str, *, kb_id: int, document_id: int, content_type: str, cfg: dict) -> list[dict]:
+    """按 segment_mode 切片并返回 child 列表（预览专用，不落库）。
+
+    直接复用入库分发器 chunk_document，保证「预览所见」与「实际入库切分」完全一致。
+    """
+    children, _ = chunk_document(
+        text, content_type=content_type, kb_id=kb_id, document_id=document_id, segment_config=cfg,
+    )
+    return children
 
 
 def _preview_payload(chunks: list[dict]) -> dict:
@@ -216,7 +207,10 @@ def preview_document_chunks(kb_id: int, document_id: int, request: ResegmentRequ
     document = db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id, KnowledgeDocument.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    chunks = _chunks_for_segment(document.text, kb_id=kb.id, document_id=document.id, cfg=request.model_dump())
+    chunks = _chunks_for_segment(
+        document.text, kb_id=kb.id, document_id=document.id,
+        content_type=document.content_type, cfg=request.model_dump(),
+    )
     return _preview_payload(chunks)
 
 
@@ -228,7 +222,10 @@ def preview_upload_chunks(kb_id: int, request: PreviewUploadRequest, membership:
         text = extract_upload_text(filename=request.filename, content_type=request.content_type, content_base64=request.content_base64)
     except KnowledgeDocumentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    chunks = _chunks_for_segment(text, kb_id=kb.id, document_id=0, cfg=request.model_dump())
+    chunks = _chunks_for_segment(
+        text, kb_id=kb.id, document_id=0,
+        content_type=request.content_type, cfg=request.model_dump(),
+    )
     return _preview_payload(chunks)
 
 

@@ -17,6 +17,7 @@ class ChunkNode(IngestionNode):
             kb_id=ctx.knowledge_base_id,
             document_id=ctx.document_id,
             segment_config=ctx.segment_config,
+            title=ctx.title,
         )
         ctx.children = children
         ctx.parents = parents
@@ -31,7 +32,8 @@ class EmbedNode(IngestionNode):
         self.provider = provider
 
     def run(self, ctx) -> None:
-        texts = [child["text"] for child in ctx.children]
+        # 优先用 embed_text（上下文增强：标题+章节面包屑前缀）；缺省回退到落库正文 text。
+        texts = [child.get("embed_text") or child["text"] for child in ctx.children]
         ctx.embeddings = self.provider.embed_batch(texts, runtime_config=ctx.runtime_config) if texts else []
 
 

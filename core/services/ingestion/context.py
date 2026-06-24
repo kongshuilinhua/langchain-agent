@@ -13,6 +13,7 @@ class IngestionContext:
     filename: str
     content_type: str
     text: str
+    title: str = ""
     segment_config: dict = field(default_factory=dict)
     runtime_config: dict | None = None
     children: list[dict] = field(default_factory=list)

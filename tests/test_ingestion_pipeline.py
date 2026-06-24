@@ -113,14 +113,60 @@ def test_chunk_document_text_returns_children_and_parents():
     assert all(c["parent_id"] in parent_ids for c in children)
 
 
-def test_chunk_document_hierarchy_has_no_separate_parents():
+def test_chunk_document_hierarchy_generates_unique_parents():
+    # hierarchy 模式现在为每个标题节点生成唯一父块（small-to-big 父块扩展才能生效）。
     md = "# H1\n正文一\n## H2\n正文二"
     children, parents = chunk_document(
         md, content_type="text/markdown", kb_id=1, document_id=4,
         segment_config={"segment_mode": "hierarchy"},
     )
-    assert children
-    assert parents == []
+    assert children and parents
+    parent_ids = [p["parent_id"] for p in parents]
+    assert len(parent_ids) == len(set(parent_ids))  # 父块 id 唯一，不再同级共享
+    parent_id_set = set(parent_ids)
+    assert all(c["parent_id"] in parent_id_set for c in children)
+
+
+def test_chunk_document_default_is_boundary_aware_and_contextual(monkeypatch):
+    # 默认 token 切分：保留段落结构（不再 \s+ 压平），且 child 携带上下文增强 embed_text。
+    import core.config
+
+    monkeypatch.setenv("RAG_CHUNK_CONTEXTUAL_EMBED", "true")
+    core.config.get_settings.cache_clear()
+    text = "第一段，讲产品保修。\n\n第二段，讲退换货政策。" * 30
+    children, parents = chunk_document(
+        text, content_type="text/plain", kb_id=2, document_id=7,
+        segment_config=None, title="售后手册",
+    )
+    assert children and parents
+    assert all("embed_text" in c for c in children)
+    # 上下文前缀应包含文档标题
+    assert any(c["embed_text"].startswith("售后手册") for c in children)
+    # 落库正文不被前缀污染
+    assert all(not c["text"].startswith("售后手册\n") for c in children)
+    core.config.get_settings.cache_clear()
+
+
+def test_chunk_document_hierarchy_secondary_split_large_section():
+    # 超 child 预算的标题正文应被二次切分为多个 child，但仍归属同一个父块。
+    big_body = "这是一段很长的正文内容，需要被二次切分。" * 80
+    md = f"# 大章节\n{big_body}"
+    children, parents = chunk_document(
+        md, content_type="text/markdown", kb_id=3, document_id=8,
+        segment_config={"segment_mode": "hierarchy"},
+    )
+    assert len(parents) == 1
+    section_children = [c for c in children if c["parent_id"] == parents[0]["parent_id"]]
+    assert len(section_children) > 1  # 发生了二次切分
+
+
+def test_chunk_csv_dynamic_rows_without_explicit_args():
+    # 不传 rows_per_child/parent 时按 token 预算动态定行，仍保证每个 child 自带表头。
+    rows = "\n".join(f"item{i},{i*10},desc{i}" for i in range(50))
+    text = "name,price,desc\n" + rows
+    children, parents = chunk_csv(text, kb_id=1, document_id=1)
+    assert children and parents
+    assert all("name" in c["text"] and "price" in c["text"] for c in children)
 
 
 def test_parent_chunk_model_and_log_column_exist():

@@ -149,6 +149,22 @@ class Settings(BaseSettings):
     rag_self_correct: bool = Field(default=False, alias="RAG_SELF_CORRECT")
     rag_self_correct_max_rounds: int = Field(default=2, alias="RAG_SELF_CORRECT_MAX_ROUNDS")
 
+    # ── 文档切分（auto/默认 parent-child）参数 ────────────────────────
+    # 🧠 长度单位为 token（cl100k_base 估算），而非字符：中英混排时块长度更稳定，
+    #    避免「520 字符」在中文≈900 token、英文≈130 token 的剧烈漂移导致 embedding 质量不稳。
+    # ⚡ child 小块用于精准向量/BM25 命中与排序；parent 大块在 small-to-big 扩展时喂给 LLM。
+    rag_chunk_parent_tokens: int = Field(default=768, alias="RAG_CHUNK_PARENT_TOKENS")
+    rag_chunk_child_tokens: int = Field(default=256, alias="RAG_CHUNK_CHILD_TOKENS")
+    # 🧠 重叠保证跨边界语义不被切断；parent 也加 overlap（旧实现 parent 无重叠，答案跨父块时会断裂）。
+    rag_chunk_parent_overlap_tokens: int = Field(default=96, alias="RAG_CHUNK_PARENT_OVERLAP_TOKENS")
+    rag_chunk_child_overlap_tokens: int = Field(default=48, alias="RAG_CHUNK_CHILD_OVERLAP_TOKENS")
+    # 🎯 上下文增强（contextual retrieval）：child 向量化前前缀拼「文档标题 + 章节面包屑」，
+    #    提升召回（裸小块常缺主语/所属章节）；只增强送入 embedding 的文本，落库/展示正文保持干净。
+    rag_chunk_contextual_embed: bool = Field(default=True, alias="RAG_CHUNK_CONTEXTUAL_EMBED")
+    # CSV 结构化分段：按 token 预算动态决定每个 child/parent 容纳的数据行数，适配宽表/窄表。
+    rag_chunk_csv_child_tokens: int = Field(default=256, alias="RAG_CHUNK_CSV_CHILD_TOKENS")
+    rag_chunk_csv_parent_tokens: int = Field(default=1024, alias="RAG_CHUNK_CSV_PARENT_TOKENS")
+
     # ── Web 搜索 ────────────────────────────────────────────────
     web_search_enabled: bool = Field(default=True, alias="WEB_SEARCH_ENABLED")
     # 🧠 使用 DuckDuckGo HTML 版本：免费、无需 API Key、无速率限制，但依赖 HTML 解析稳定性

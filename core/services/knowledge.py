@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import logging
 import re
+from functools import lru_cache
 from pathlib import Path
 from sqlalchemy.orm import Session
 
@@ -338,6 +339,7 @@ def index_document(
         filename=document.filename,
         content_type=document.content_type,
         text=document.text,
+        title=document.title or document.filename or "",
         segment_config=document.segment_config or {},
         runtime_config=runtime_config,
     )
@@ -440,18 +442,96 @@ def split_text(text: str, *, chunk_size: int = 700) -> list[str]:
     return [cleaned[index : index + chunk_size] for index in range(0, len(cleaned), chunk_size)]
 
 
+# ── 切分基础设施：token 计长 + 结构保留归一化 + CN/EN 递归分隔符 ──────────────
+
+# 递归分隔符优先级：段落 > 行 > 中文句末 > 英文句末 > 中文子句 > 英文子句 > 空格 > 字符。
+# 让切点尽量落在自然语义边界，而非定长字符窗里把句子/词从中间截断。
+_RECURSIVE_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ". ", "! ", "? ", "; ", "，", ", ", " ", ""]
+
+
+@lru_cache(maxsize=1)
+def _token_encoder():
+    """cl100k_base 编码器（懒加载+缓存）；离线不可用时返回 None，调用方回退到字符长度。"""
+    try:
+        import tiktoken
+
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return None
+
+
+def _token_len(text: str) -> int:
+    """token 计长（embedding/LLM 的真实长度单位）；编码器不可用时退化为字符数。"""
+    encoder = _token_encoder()
+    if encoder is None:
+        return len(text)
+    try:
+        return len(encoder.encode(text))
+    except Exception:
+        return len(text)
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _normalize_keep_structure(text: str) -> str:
+    r"""轻量归一化：统一换行、去行尾空白、压缩 3+ 连续空行为 1 个空行。
+
+    关键区别于旧实现的 `re.sub(r"\s+", " ")`——保留段落/换行结构，递归切分才能命中边界。
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _build_splitter(*, chunk_size: int, chunk_overlap: int, length_unit: str):
+    """构造边界感知递归切分器；length_unit='token' 用 tiktoken 计长，否则按字符。"""
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    length_function = _token_len if length_unit == "token" else len
+    chunk_size = max(int(chunk_size), 1)
+    chunk_overlap = max(min(int(chunk_overlap), chunk_size - 1), 0)
+    return RecursiveCharacterTextSplitter(
+        separators=_RECURSIVE_SEPARATORS,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        length_function=length_function,
+        keep_separator=True,
+    )
+
+
+def _contextual_prefix(title: str | None, section: str | None) -> str:
+    """拼「文档标题 · 章节面包屑」作为 child 向量化前缀（上下文增强）。"""
+    if not get_settings().rag_chunk_contextual_embed:
+        return ""
+    parts = [p.strip() for p in (title, section) if p and p.strip()]
+    return " · ".join(parts)
+
+
+def _embed_text(prefix: str, text: str) -> str:
+    """组合上下文前缀与正文：仅用于送入 embedding，落库/展示的 text 保持干净。"""
+    return f"{prefix}\n{text}" if prefix else text
+
+
 def chunk_csv(
     text: str,
     *,
     kb_id: int,
     document_id: int,
-    rows_per_child: int = 5,
-    rows_per_parent: int = 20,
+    rows_per_child: int | None = None,
+    rows_per_parent: int | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """CSV 结构化分段：每个 child = 表头 + 若干数据行（自带表头，语义自洽）。返回 (children, parents)。"""
+    """CSV 结构化分段：每个 child = 表头 + 若干数据行（自带表头，语义自洽）。返回 (children, parents)。
+
+    rows_per_child/parent 为 None 时按 token 预算动态定行（宽表少装、窄表多装），避免固定 5 行
+    在宽表里超长、在窄表里过碎；显式传入则尊重调用方（向后兼容）。
+    """
     import csv
     import io
 
+    settings = get_settings()
     children: list[dict] = []
     parents: list[dict] = []
     rows = [row for row in csv.reader(io.StringIO(text)) if any((cell or "").strip() for cell in row)]
@@ -460,9 +540,25 @@ def chunk_csv(
     header_line = ", ".join((cell or "").strip() for cell in rows[0])
     data_rows = rows[1:] or [rows[0]]  # 仅表头时把表头当作唯一数据行
 
+    def _row_text(row: list[str]) -> str:
+        return ", ".join((cell or "").strip() for cell in row)
+
     def _rows_text(group: list[list[str]]) -> str:
-        body = "\n".join(", ".join((cell or "").strip() for cell in row) for row in group)
+        body = "\n".join(_row_text(row) for row in group)
         return f"{header_line}\n{body}"
+
+    # 动态定行：表头 + 平均单行 token 成本，决定一个预算能容纳几行（至少 1 行）。
+    if rows_per_child is None or rows_per_parent is None:
+        header_tokens = _token_len(header_line)
+        sample = data_rows[: min(len(data_rows), 20)]
+        avg_row_tokens = max(1, sum(_token_len(_row_text(r)) for r in sample) // max(len(sample), 1))
+        dyn_child = max(1, (settings.rag_chunk_csv_child_tokens - header_tokens) // avg_row_tokens)
+        dyn_parent = max(dyn_child, (settings.rag_chunk_csv_parent_tokens - header_tokens) // avg_row_tokens)
+        rows_per_child = rows_per_child or dyn_child
+        rows_per_parent = rows_per_parent or dyn_parent
+
+    rows_per_child = max(1, int(rows_per_child))
+    rows_per_parent = max(rows_per_child, int(rows_per_parent))
 
     parent_index = 0
     for p_start in range(0, len(data_rows), rows_per_parent):
@@ -472,7 +568,7 @@ def chunk_csv(
         parents.append({
             "parent_id": parent_id,
             "text": parent_text,
-            "content_hash": hashlib.sha256(parent_text.encode("utf-8")).hexdigest(),
+            "content_hash": _hash(parent_text),
         })
         child_index = 0
         for c_start in range(0, len(p_rows), rows_per_child):
@@ -483,50 +579,66 @@ def chunk_csv(
                 "text": child_text,
                 "page": None,
                 "section": "",
-                "content_hash": hashlib.sha256(child_text.encode("utf-8")).hexdigest(),
+                "content_hash": _hash(child_text),
             })
             child_index += 1
         parent_index += 1
     return children, parents
 
 
-def _chunk_parent_child(
+def _split_parent_child(
     text: str,
     *,
     kb_id: int,
     document_id: int,
-    parent_size: int = 1600,
-    child_size: int = 520,
-    overlap: int = 80,
+    parent_size: int,
+    child_size: int,
+    parent_overlap: int,
+    child_overlap: int,
+    length_unit: str = "token",
+    title: str | None = None,
+    section: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """parent-child 分段，返回 (children, parents)。children 形状与 split_parent_child 一致，另收集父块全文。"""
-    cleaned = re.sub(r"\s+", " ", text).strip()
+    r"""边界感知 parent-child 切分核心，返回 (children, parents)。
+
+    - 用递归分隔符在自然语义边界切分（不再 `\s+→空格` 压平结构）。
+    - parent 与 child 各自带 overlap，跨块语义不被切断（旧实现 parent 无重叠）。
+    - child 额外携带 embed_text（上下文增强前缀），仅用于向量化；落库 text 保持干净。
+    """
+    cleaned = _normalize_keep_structure(text)
     children: list[dict] = []
     parents: list[dict] = []
     if not cleaned:
         return children, parents
+
+    parent_splitter = _build_splitter(chunk_size=parent_size, chunk_overlap=parent_overlap, length_unit=length_unit)
+    child_splitter = _build_splitter(chunk_size=child_size, chunk_overlap=child_overlap, length_unit=length_unit)
+    prefix = _contextual_prefix(title, section)
+
     parent_index = 0
-    step = max(child_size - overlap, 1)
-    for parent_start in range(0, len(cleaned), parent_size):
-        parent_text = cleaned[parent_start : parent_start + parent_size]
+    for parent_text in parent_splitter.split_text(cleaned):
+        parent_text = parent_text.strip()
+        if not parent_text:
+            continue
         parent_id = f"kb{kb_id}-doc{document_id}-parent{parent_index}"
         parents.append({
             "parent_id": parent_id,
             "text": parent_text,
-            "content_hash": hashlib.sha256(parent_text.encode("utf-8")).hexdigest(),
+            "content_hash": _hash(parent_text),
         })
         child_index = 0
-        for child_start in range(0, len(parent_text), step):
-            child_text = parent_text[child_start : child_start + child_size].strip()
+        for child_text in child_splitter.split_text(parent_text):
+            child_text = child_text.strip()
             if not child_text:
                 continue
             children.append({
                 "parent_id": parent_id,
                 "chunk_id": f"{parent_id}-child{child_index}",
                 "text": child_text,
+                "embed_text": _embed_text(prefix, child_text),
                 "page": None,
-                "section": "",
-                "content_hash": hashlib.sha256(child_text.encode("utf-8")).hexdigest(),
+                "section": section or "",
+                "content_hash": _hash(child_text),
             })
             child_index += 1
         parent_index += 1
@@ -540,27 +652,49 @@ def chunk_document(
     kb_id: int,
     document_id: int,
     segment_config: dict | None = None,
+    title: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """入库分段总分发器，返回 (children, parents)。CSV(auto 模式) 走结构化；hierarchy 无独立父块层。"""
+    """入库分段总分发器，返回 (children, parents)。
+
+    - CSV(auto 模式) 走结构化分段（每行自带表头）。
+    - hierarchy 模式按 Markdown 标题切，超长标题块二次切分，并生成对应父块（small-to-big 生效）。
+    - custom 模式按用户「字数上限/重合度」（字符单位）切。
+    - 默认/auto 按 token 预算做边界感知 parent-child 切分。
+    """
     cfg = segment_config or {}
     seg_mode = cfg.get("segment_mode", "auto")
+    settings = get_settings()
     if "csv" in (content_type or "").lower() and seg_mode == "auto":
         return chunk_csv(text, kb_id=kb_id, document_id=document_id)
     if seg_mode == "hierarchy":
-        children = split_by_hierarchy(
+        return _chunk_by_hierarchy(
             text, kb_id=kb_id, document_id=document_id,
             max_level=cfg.get("hierarchy_level", 3),
             keep_hierarchy_info=cfg.get("keep_hierarchy_info", True),
+            title=title,
         )
-        return children, []
     if seg_mode == "custom":
-        return _chunk_parent_child(
+        max_len = max(int(cfg.get("max_chunk_len", 1600)), 1)
+        overlap_pct = max(0, min(int(cfg.get("overlap_pct", 10)), 50))
+        child_len = max(int(max_len * 0.35), 1)
+        return _split_parent_child(
             text, kb_id=kb_id, document_id=document_id,
-            parent_size=cfg.get("max_chunk_len", 1600),
-            child_size=int(cfg.get("max_chunk_len", 1600) * 0.35),
-            overlap=int(cfg.get("max_chunk_len", 1600) * cfg.get("overlap_pct", 10) / 100),
+            parent_size=max_len,
+            child_size=child_len,
+            parent_overlap=int(max_len * overlap_pct / 100),
+            child_overlap=int(child_len * overlap_pct / 100),
+            length_unit="char",
+            title=title,
         )
-    return _chunk_parent_child(text, kb_id=kb_id, document_id=document_id)
+    return _split_parent_child(
+        text, kb_id=kb_id, document_id=document_id,
+        parent_size=settings.rag_chunk_parent_tokens,
+        child_size=settings.rag_chunk_child_tokens,
+        parent_overlap=settings.rag_chunk_parent_overlap_tokens,
+        child_overlap=settings.rag_chunk_child_overlap_tokens,
+        length_unit="token",
+        title=title,
+    )
 
 
 def split_parent_child(
@@ -572,34 +706,137 @@ def split_parent_child(
     child_size: int = 520,
     overlap: int = 80,
 ) -> list[dict]:
-    cleaned = re.sub(r"\s+", " ", text).strip()
+    """向后兼容包装：字符单位边界感知 parent-child 切分，仅返回 children。"""
+    children, _ = _split_parent_child(
+        text, kb_id=kb_id, document_id=document_id,
+        parent_size=parent_size, child_size=child_size,
+        parent_overlap=overlap, child_overlap=overlap,
+        length_unit="char",
+    )
+    return children
+
+
+def _emit_hierarchy_node(
+    children: list[dict],
+    parents: list[dict],
+    *,
+    kb_id: int,
+    document_id: int,
+    node_index: int,
+    heading: str | None,
+    body: str,
+    section: str,
+    title: str | None,
+) -> None:
+    """把一个标题节点（标题+正文）落成 1 个唯一父块 + 1..N 个 child。
+
+    正文不超 child 预算时保持单块（含标题，语义自洽，兼容历史行为）；
+    超长时二次切分，每块前置标题保留小标题语境，避免「整章一个超大块」稀释向量。
+    """
+    settings = get_settings()
+    full_text = f"{heading}\n{body}" if heading else body
+    parent_id = f"kb{kb_id}-doc{document_id}-hnode{node_index}"
+    parents.append({
+        "parent_id": parent_id,
+        "text": full_text,
+        "content_hash": _hash(full_text),
+    })
+    if _token_len(full_text) <= settings.rag_chunk_child_tokens:
+        pieces = [full_text]
+    else:
+        splitter = _build_splitter(
+            chunk_size=settings.rag_chunk_child_tokens,
+            chunk_overlap=settings.rag_chunk_child_overlap_tokens,
+            length_unit="token",
+        )
+        pieces = [
+            (f"{heading}\n{piece.strip()}" if heading else piece.strip())
+            for piece in splitter.split_text(body)
+            if piece.strip()
+        ] or [full_text]
+    prefix = _contextual_prefix(title, section)
+    for child_index, piece in enumerate(pieces):
+        children.append({
+            "parent_id": parent_id,
+            "chunk_id": f"{parent_id}-child{child_index}",
+            "text": piece,
+            "embed_text": _embed_text(prefix, piece),
+            "page": None,
+            "section": section,
+            "content_hash": _hash(piece),
+        })
+
+
+def _chunk_by_hierarchy(
+    text: str,
+    *,
+    kb_id: int,
+    document_id: int,
+    max_level: int = 3,
+    keep_hierarchy_info: bool = True,
+    title: str | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """按 Markdown 标题层级切分，返回 (children, parents)。
+
+    每个标题节点对应一个唯一父块（修复旧实现「同级标题共享 parent_id」的 bug，让 small-to-big
+    父块扩展真正生效）；超 child 预算的正文二次切分；无标题时退化为默认 token parent-child（仍带父块）。
+    """
+    cleaned = text.strip()
+    children: list[dict] = []
+    parents: list[dict] = []
     if not cleaned:
-        return []
-    output = []
-    parent_index = 0
-    for parent_start in range(0, len(cleaned), parent_size):
-        parent_text = cleaned[parent_start : parent_start + parent_size]
-        parent_id = f"kb{kb_id}-doc{document_id}-parent{parent_index}"
-        child_index = 0
-        step = max(child_size - overlap, 1)
-        for child_start in range(0, len(parent_text), step):
-            child_text = parent_text[child_start : child_start + child_size].strip()
-            if not child_text:
-                continue
-            chunk_id = f"{parent_id}-child{child_index}"
-            output.append(
-                {
-                    "parent_id": parent_id,
-                    "chunk_id": chunk_id,
-                    "text": child_text,
-                    "page": None,
-                    "section": "",
-                    "content_hash": hashlib.sha256(child_text.encode("utf-8")).hexdigest(),
-                }
-            )
-            child_index += 1
-        parent_index += 1
-    return output
+        return children, parents
+
+    heading_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+    all_matches = list(heading_pattern.finditer(cleaned))
+    matches = [m for m in all_matches if len(m.group(1)) <= max_level]
+    if not matches:
+        # 退化：无（符合层级的）标题则走默认 token parent-child 切分
+        settings = get_settings()
+        return _split_parent_child(
+            cleaned, kb_id=kb_id, document_id=document_id,
+            parent_size=settings.rag_chunk_parent_tokens,
+            child_size=settings.rag_chunk_child_tokens,
+            parent_overlap=settings.rag_chunk_parent_overlap_tokens,
+            child_overlap=settings.rag_chunk_child_overlap_tokens,
+            length_unit="token",
+            title=title,
+        )
+
+    node_index = 0
+    # 第一个标题之前的「前言/介绍」文本，防止丢失
+    intro_text = cleaned[: matches[0].start()].strip()
+    if intro_text:
+        _emit_hierarchy_node(
+            children, parents, kb_id=kb_id, document_id=document_id, node_index=node_index,
+            heading=None, body=intro_text,
+            section="前言" if keep_hierarchy_info else "", title=title,
+        )
+        node_index += 1
+
+    # 层级路径栈，记录当前的 (level, heading_text) 元组，用于生成章节面包屑
+    path_stack: list[tuple[int, str]] = []
+    for i, match in enumerate(matches):
+        level = len(match.group(1))
+        heading_text = match.group(2).strip()
+        start_pos = match.end()
+        end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(cleaned)
+        body = cleaned[start_pos:end_pos].strip()
+
+        # 退栈：栈顶层级 >= 当前层级则弹出（同级兄弟互相替换，而非错误嵌套）
+        while path_stack and path_stack[-1][0] >= level:
+            path_stack.pop()
+        path_stack.append((level, f"H{level}: {heading_text}"))
+        section_path = " > ".join(item[1] for item in path_stack) if keep_hierarchy_info else ""
+
+        if not body:
+            continue
+        _emit_hierarchy_node(
+            children, parents, kb_id=kb_id, document_id=document_id, node_index=node_index,
+            heading=heading_text, body=body, section=section_path, title=title,
+        )
+        node_index += 1
+    return children, parents
 
 
 def split_by_hierarchy(
@@ -608,76 +845,14 @@ def split_by_hierarchy(
     kb_id: int,
     document_id: int,
     max_level: int = 3,
-    keep_hierarchy_info: bool = True
+    keep_hierarchy_info: bool = True,
 ) -> list[dict]:
-    # 清理多余空格
-    cleaned = text.strip()
-    if not cleaned:
-        return []
-
-    heading_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
-    all_matches = list(heading_pattern.finditer(cleaned))
-
-    if not all_matches:
-        # 退化策略：无标题则调用默认 parent-child 块拆分
-        return split_parent_child(cleaned, kb_id=kb_id, document_id=document_id)
-
-    # 预先过滤出符合层级要求的标题
-    matches = [m for m in all_matches if len(m.group(1)) <= max_level]
-
-    if not matches:
-        # 如果过滤后无标题，同样退化
-        return split_parent_child(cleaned, kb_id=kb_id, document_id=document_id)
-
-    chunks = []
-    
-    # 提取第一个标题之前的“前言/介绍”文本，防止这部分数据丢失
-    first_heading_start = matches[0].start()
-    intro_text = cleaned[0:first_heading_start].strip()
-    if intro_text:
-        parent_id = f"kb{kb_id}-doc{document_id}-intro"
-        chunks.append({
-            "parent_id": parent_id,
-            "chunk_id": f"{parent_id}-chunk-intro",
-            "text": intro_text,
-            "page": None,
-            "section": "前言" if keep_hierarchy_info else "",
-            "content_hash": hashlib.sha256(intro_text.encode("utf-8")).hexdigest(),
-        })
-
-    # 层级路径栈，记录当前的 (level, heading_text) 元组
-    path_stack: list[tuple[int, str]] = []
-
-    for i, match in enumerate(matches):
-        level = len(match.group(1)) # 几层 # 号
-        heading_text = match.group(2).strip()
-
-        # 计算正文起止点
-        start_pos = match.end()
-        end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(cleaned)
-        chunk_body = cleaned[start_pos:end_pos].strip()
-
-        # 动态维护层级路径面包屑：若栈顶层级比当前层级更深或相等，则持续退栈
-        while path_stack and path_stack[-1][0] >= level:
-            path_stack.pop()
-            
-        path_stack.append((level, f"H{level}: {heading_text}"))
-        
-        section_path = " > ".join(item[1] for item in path_stack) if keep_hierarchy_info else ""
-        parent_id = f"kb{kb_id}-doc{document_id}-hnode-{level}"
-
-        if chunk_body:
-            full_text = f"{heading_text}\n{chunk_body}"
-            chunks.append({
-                "parent_id": parent_id,
-                "chunk_id": f"{parent_id}-chunk-{i}",
-                "text": full_text,
-                "page": None,
-                "section": section_path,
-                "content_hash": hashlib.sha256(full_text.encode("utf-8")).hexdigest(),
-            })
-
-    return chunks
+    """向后兼容包装：仅返回 hierarchy children（父块由 chunk_document 路径另取）。"""
+    children, _ = _chunk_by_hierarchy(
+        text, kb_id=kb_id, document_id=document_id,
+        max_level=max_level, keep_hierarchy_info=keep_hierarchy_info,
+    )
+    return children
 
 
 def extract_upload_text(*, filename: str, content_type: str, content_base64: str) -> str:
