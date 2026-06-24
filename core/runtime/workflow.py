@@ -25,13 +25,14 @@ from core.integrations.llm import OpenAICompatibleProvider
 from core.services.agents import get_agent_detail, normalize_memory, normalize_rag, normalize_tool_policy, normalize_query_understanding
 from core.services import query_understanding as qu_service
 from core.services.rag import retrieve
-from core.services.memory import format_profile_memory, get_memory_profile, memory_used_event, recall_profile_memory, recall_facts
+from core.services.memory import get_memory_profile, memory_used_event, recall_profile_memory, recall_facts
 from core.services.memory_summary import build_memory_payload, parse_memory, summarize_turns
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 try:
     from langchain_core.messages.utils import count_tokens_approximately
 except ImportError:
-    count_tokens_approximately = lambda msgs: sum(len(m.content) for m in msgs) // 2
+    def count_tokens_approximately(msgs):
+        return sum(len(m.content) for m in msgs) // 2
 from core.services.models import resolve_agent_model
 from core.services.tools import execute_tool, tool_call_event, tool_schema_for_llm
 from core.services.uploads import get_workspace_uploads
@@ -1237,8 +1238,10 @@ def compact_session_memory_task(
     """
     FastAPI 后台任务专用的包装器，新开 db Session 并在结束时关闭。
     """
+    import logging
     from core.db.session import SessionLocal
     from core.runtime.memory_pipeline import run_memory_pipeline
+    logger = logging.getLogger(__name__)
     db = SessionLocal()
     try:
         run_memory_pipeline(

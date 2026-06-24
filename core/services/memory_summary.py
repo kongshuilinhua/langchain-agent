@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 try:
     from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 except ImportError:
-    count_tokens_approximately = lambda msgs: sum(len(m.content) for m in msgs) // 2
+    def count_tokens_approximately(msgs):
+        return sum(len(m.content) for m in msgs) // 2
 
     def trim_messages(messages, max_tokens, strategy, token_counter, start_on):
         keep = []

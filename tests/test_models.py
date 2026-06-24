@@ -1,12 +1,27 @@
-from core.db.models import KnowledgeDocument
+import uuid
+
+from core.db.models import KnowledgeBase, KnowledgeDocument, User, Workspace
 from core.db.session import SessionLocal, init_db
 
 def test_knowledge_document_segment_config():
     init_db()
     db = SessionLocal()
+    suffix = uuid.uuid4().hex[:12]
+    user = workspace = None
     try:
+        # 自建 FK 父链（user → workspace → knowledge_base），用例自洽、不依赖测试执行顺序
+        user = User(email=f"seg-{suffix}@example.com", name="seg", password_hash="x")
+        db.add(user)
+        db.flush()
+        workspace = Workspace(name=f"seg-{suffix}", slug=f"seg-{suffix}")
+        db.add(workspace)
+        db.flush()
+        kb = KnowledgeBase(workspace_id=workspace.id, name="seg-kb", created_by=user.id)
+        db.add(kb)
+        db.flush()
+
         doc = KnowledgeDocument(
-            knowledge_base_id=1,
+            knowledge_base_id=kb.id,
             filename="test.md",
             title="Test Doc",
             content_type="text/markdown",
@@ -22,11 +37,17 @@ def test_knowledge_document_segment_config():
         db.commit()
         db.refresh(doc)
         assert doc.segment_config["hierarchy_level"] == 3
-        
-        # 清理测试数据
-        db.delete(doc)
-        db.commit()
     finally:
+        # 清理：删 workspace 触发 DB 级联（kb→document），再删 user
+        db.rollback()
+        try:
+            if workspace is not None and workspace.id is not None:
+                db.query(Workspace).filter(Workspace.id == workspace.id).delete()
+            if user is not None and user.id is not None:
+                db.query(User).filter(User.id == user.id).delete()
+            db.commit()
+        except Exception:
+            db.rollback()
         db.close()
 
 

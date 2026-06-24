@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import TypedDict, Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field
 
 from core.config import get_settings
