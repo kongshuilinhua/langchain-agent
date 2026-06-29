@@ -61,7 +61,9 @@ CONTRIBUTING.md
 
 # 备份文件
 *.bak
+# 忽略仓库根/散落的个人临时测试脚本，但放行 tests/ 目录下的正式测试用例
 test_*.py
+!tests/test_*.py
 
 # 开发用临时脚本与本地数据集，不入库
 scratch/
