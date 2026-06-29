@@ -67,6 +67,10 @@ test_*.py
 
 # 开发用临时脚本与本地数据集，不入库
 scratch/
+
+# Alembic 迁移：仅本地保留，不纳入仓库
+/alembic/
+/alembic.ini
 dataset/
 
 # 个人面试准备脚本（本地保留，不入库）
