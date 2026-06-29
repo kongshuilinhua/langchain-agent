@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import uuid
 from datetime import datetime, timezone, timedelta
 from core.services.memory import normalize_facts
 

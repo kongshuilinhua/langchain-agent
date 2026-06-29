@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 import uuid
 from datetime import datetime, timezone
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import core.db.session as db_session
 import core.config
 from core.db.models import SessionMemory, AgentMemoryProfile, Session as DbSession, Agent, User, Workspace
 from core.runtime.memory_pipeline import run_memory_pipeline, ExtractedMemory
-from core.services.memory import recall_profile_memory, recall_facts, get_memory_profile
+from core.services.memory import recall_profile_memory, get_memory_profile
 
 
 def test_memory_pipeline_compaction_and_extraction(client, monkeypatch):

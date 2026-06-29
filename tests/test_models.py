@@ -1,3 +1,4 @@
+import json
 import uuid
 
 from core.db.models import KnowledgeBase, KnowledgeDocument, User, Workspace
@@ -50,8 +51,6 @@ def test_knowledge_document_segment_config():
             db.rollback()
         db.close()
 
-
-import json
 
 def test_calculator_ast_security():
     from core.services.tools import _exec_calculator

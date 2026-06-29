@@ -1,6 +1,11 @@
 # ── B1 会话记忆摘要：纯函数单测（不依赖 DB/LLM）────────────────────────
 
+import inspect
 import json
+
+import pytest
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import Runnable
 
 from core.integrations.llm import ChatResponse
 from core.services.memory_summary import (
@@ -311,11 +316,6 @@ def test_summarize_turns_passes_runtime_config():
     # runtime_config is passed through, no assertion needed on it
     assert len(provider.calls) == 1
 
-
-import pytest
-import inspect
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import Runnable
 
 class _DelegatingChatModel(Runnable):
     def __init__(self, model_name=None):
