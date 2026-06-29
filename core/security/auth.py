@@ -194,18 +194,18 @@ def _token_is_active(jti: str, exp: int) -> bool:
     """
     检查令牌是否未被撤销。
 
-    如果 Redis 可用，查询 jti 是否在黑名单中。
-    如果 Redis 不可用，静默跳过撤销检查（降级策略）。
+    查询 jti 是否在 Redis 黑名单中：
+    - 命中黑名单 → 已撤销，返回 False。
+    - 未命中 / Redis 不可用 → 视为有效（降级放行），返回 True。
+
+    🛡️ `redis_store.exists()` 内部已对「未配置 / 连接故障」做降级（返回 False），
+        因此此处无需再包一层宽 except —— 让真正的代码缺陷能够暴露。
     """
     if not jti:
         return True
-    try:
-        from core.services.rag_cache import redis_store
-        if redis_store.available and redis_store.client:
-            return not redis_store.client.exists(f"revoked:{jti}")
-    except Exception:
-        pass
-    return True
+    from core.services.rag_cache import redis_store
+
+    return not redis_store.exists(f"revoked:{jti}")
 
 
 def revoke_access_token(token: str) -> bool:
@@ -219,23 +219,21 @@ def revoke_access_token(token: str) -> bool:
 
     黑名单 TTL 设置为令牌剩余有效期，过期后自动清理。
 
-    返回 True 表示撤销成功，False 表示 Redis 不可用（降级）。
+    返回 True 表示撤销成功，False 表示令牌不合法或 Redis 不可用（降级）。
     """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    # 仅对令牌解析做窄异常兜底；Redis 写入失败由 set_string 内部降级处理。
     try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return False
         payload = json.loads(_b64url_decode(parts[1]))
-        jti = payload.get("jti", "")
-        exp = payload.get("exp", 0)
-        if not jti:
-            return False
-        now_ts = int(time.time())
-        ttl = max(1, exp - now_ts)
-        from core.services.rag_cache import redis_store
-        if redis_store.available and redis_store.client:
-            redis_store.client.setex(f"revoked:{jti}", ttl, "1")
-            return True
-    except Exception:
-        pass
-    return False
+    except (ValueError, json.JSONDecodeError):
+        return False
+    jti = payload.get("jti", "")
+    exp = payload.get("exp", 0)
+    if not jti:
+        return False
+    ttl = max(1, exp - int(time.time()))
+    from core.services.rag_cache import redis_store
+
+    return redis_store.set_string(f"revoked:{jti}", ttl, "1")

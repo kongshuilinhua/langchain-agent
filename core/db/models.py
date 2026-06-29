@@ -305,6 +305,8 @@ class Upload(Base):
     # data_url 存储用于多模态渲染的 Base64 编码数据。
     # ⚡ 边界与性能思考：长文本和图像 data_url 对数据库 I/O 比较重，大文件上传在生产环境应建议存储到对象存储（S3/OSS）并在此处保存 URL 引用。
     data_url: Mapped[str] = mapped_column(Text, default="")
+    # 对象存储中的对象键；非空表示文件存在对象库（此时 data_url 为空，按需取回转 base64）。
+    storage_key: Mapped[str] = mapped_column(String(255), default="")
     text: Mapped[str] = mapped_column(Text, default="")
     size: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

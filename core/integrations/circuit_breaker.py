@@ -85,3 +85,47 @@ class CircuitBreaker:
                 "threshold": self.failure_threshold,
                 "timewindow_s": self.timewindow,
             }
+
+
+class RedisCircuitBreaker:
+    """
+    三态熔断器的 Redis 共享态变体。
+
+    🎯 与 CircuitBreaker 接口完全一致（allow_request / record_success / record_failure / status），
+        可直接替换。区别在于失败计数与开断状态存 Redis，多 worker / 多实例共享同一判定——
+        进程内版本在多 worker 下各算各的（一个 worker 熔断了、别的还在打），这里消除了该不一致。
+
+    🛡️ Redis 不可用时底层 store 各操作自动降级（allow_request 放行、记录类无副作用），
+        等效退化为「不熔断」，不阻断主流程。
+    """
+
+    def __init__(self, name: str, failure_threshold: int = 3, timewindow: int = 60):
+        self.name = name
+        self.failure_threshold = failure_threshold
+        self.timewindow = timewindow
+
+    def allow_request(self) -> bool:
+        from core.services.rag_cache import redis_store
+
+        return redis_store.breaker_allow(self.name)
+
+    def record_success(self):
+        from core.services.rag_cache import redis_store
+
+        redis_store.breaker_on_success(self.name)
+
+    def record_failure(self):
+        from core.services.rag_cache import redis_store
+
+        redis_store.breaker_on_failure(self.name, self.failure_threshold, self.timewindow)
+
+    def status(self) -> dict:
+        from core.services.rag_cache import redis_store
+
+        return {
+            "name": self.name,
+            "open": not redis_store.breaker_allow(self.name),
+            "threshold": self.failure_threshold,
+            "timewindow_s": self.timewindow,
+            "backend": "redis",
+        }

@@ -149,7 +149,10 @@ def test_recall_profile_memory_reuses_prerecalled_facts():
 
 
 def test_recall_profile_memory_fallback(client):
-    """测试长期记忆向量召回兜底机制：Milvus 宕机/未配置时自动退回全量拼接。"""
+    """测试长期记忆召回兜底机制：embedding 调用失败时自动退回全量 facts 拼接（而非返回空）。
+
+    召回已改为进程内 embedding 余弦相似度（不再依赖 Milvus），故兜底触发点由「Milvus 宕」
+    改为「embedding 不可用」。"""
     # 从重新加载后的 db_session 获取 SessionLocal
     db = db_session.SessionLocal()
     unique_id = uuid.uuid4().hex[:8]
@@ -193,10 +196,10 @@ def test_recall_profile_memory_fallback(client):
         db.commit()
         db.refresh(profile)
         
-        # 模拟 Milvus 抛出异常的情况下的召回
-        with patch("langchain_community.vectorstores.Milvus", side_effect=Exception("Milvus connection failed")):
-            recalled_text = recall_profile_memory(profile, query="你写什么语言？", k=1)
-            
+        # 模拟 embedding 调用失败：召回应优雅退回全量 facts（取 top-k）而非返回空
+        with patch("core.integrations.llm.OpenAICompatibleProvider.embed", side_effect=Exception("embedding failed")):
+            recalled_text = recall_profile_memory(profile, query="你写什么语言？", k=5)
+
             # 应该降级回全量拼接，包含所有的 facts 和 preferences
             assert "Long-term memory summary:" in recalled_text
             assert "这是长期摘要说明" in recalled_text

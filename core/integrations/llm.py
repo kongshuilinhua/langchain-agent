@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from core.config import get_settings
-from core.integrations.circuit_breaker import CircuitBreaker
+from core.integrations.circuit_breaker import CircuitBreaker, RedisCircuitBreaker
 
 # 🎯 系统硬编码默认的 OpenAI 兼容模式 API 端点（指向阿里云百炼/通义千问兼容接口）
 DASHSCOPE_COMPATIBLE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -298,10 +298,26 @@ class OpenAICompatibleProvider:
             raise RuntimeError("Embedding API key is not configured")
         self.last_embed_mock = False
 
+        model = settings.openai_embedding_model
+        # 🎯 缓存分层：query 向量化是热点读路径，命中则直接返回，省一次最贵的外部 API 调用。
+        #    缓存不随知识库文档增删失效（同文本同模型向量恒定），命中率远高于整条检索结果缓存。
+        cache_enabled = bool(getattr(settings, "embedding_cache_enabled", False))
+        if cache_enabled:
+            from core.observability.metrics import record_cache
+            from core.services.rag_cache import redis_store
+
+            cached = redis_store.get_embedding(model, text)
+            record_cache("embedding", cached is not None)
+            if cached is not None:
+                return cached
+
         url = self._api_base(settings, runtime_config, purpose="embedding").rstrip("/") + "/embeddings"
-        payload = {"model": settings.openai_embedding_model, "input": text}
+        payload = {"model": model, "input": text}
         data = self._post_json(url, payload, api_key)
-        return data["data"][0]["embedding"]
+        vector = data["data"][0]["embedding"]
+        if cache_enabled:
+            redis_store.set_embedding(model, text, vector, settings.embedding_cache_ttl_seconds)
+        return vector
 
     @staticmethod
     def _mock_embed(text: str) -> list[float]:
@@ -459,9 +475,21 @@ class OpenAICompatibleProvider:
             return DASHSCOPE_COMPATIBLE_BASE
         return base or OPENAI_COMPATIBLE_DEFAULT_BASE
 
-    def _breaker_for(self, model_name: str) -> CircuitBreaker:
-        """获取指定模型的熔断器实例（惰性创建）。"""
+    def _breaker_for(self, model_name: str):
+        """
+        获取指定模型的熔断器实例（惰性创建）。
+
+        开启 circuit_breaker_distributed 且 Redis 可用时返回 Redis 共享态熔断器（多 worker 一致），
+        否则用进程内三态熔断器。两者接口一致，调用方无感。
+        """
         if model_name not in self._breakers:
+            settings = get_settings()
+            if settings.circuit_breaker_distributed:
+                from core.services.rag_cache import redis_store
+
+                if redis_store.available:
+                    self._breakers[model_name] = RedisCircuitBreaker(f"model:{model_name}", failure_threshold=3, timewindow=60)
+                    return self._breakers[model_name]
             self._breakers[model_name] = CircuitBreaker(failure_threshold=3, timewindow=60)
         return self._breakers[model_name]
 

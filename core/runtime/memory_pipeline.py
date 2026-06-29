@@ -16,7 +16,6 @@ from core.services.memory import (
     get_memory_profile,
     normalize_facts,
     normalize_preferences,
-    sync_facts_to_vector_store,
 )
 from core.runtime.workflow import compact_session_memory
 
@@ -167,11 +166,7 @@ def _build_graph(db: Session, settings: Any):
             profile.updated_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(profile)
-
-            # 向量库同步
-            if extracted_facts:
-                sync_facts_to_vector_store(profile)
-
+            # facts 召回已改为进程内 embedding 相似度（recall_facts），不再需要把 facts 同步进 Milvus。
         except Exception as e:
             db.rollback()
             logger.warning("Failed to persist long-term memory in persist_node: %s", e)

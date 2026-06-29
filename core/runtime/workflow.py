@@ -35,7 +35,7 @@ except ImportError:
         return sum(len(m.content) for m in msgs) // 2
 from core.services.models import resolve_agent_model
 from core.services.tools import execute_tool, tool_call_event, tool_schema_for_llm
-from core.services.uploads import get_workspace_uploads
+from core.services.uploads import get_workspace_uploads, resolve_image_data_url
 from core.services.user_models import (
     resolve_user_model_config,
     user_model_runtime_config,
@@ -1013,7 +1013,8 @@ class WorkflowRunner:
             return text
         content = [{"type": "text", "text": text}]
         for upload in image_uploads:
-            content.append({"type": "image_url", "image_url": {"url": upload.data_url}})
+            # 兼容对象存储：data_url 内联则直用，否则从对象库取回转 base64（外部 LLM 够不到内网对象库）
+            content.append({"type": "image_url", "image_url": {"url": resolve_image_data_url(upload)}})
         return content
 
     def _merge_variables(self, definitions: list[dict], provided: dict) -> dict:

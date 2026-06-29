@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from core.config import get_settings
 from core.db.models import Upload
+from core.integrations.storage import object_storage
 
 # 🧠 魔鬼数字与前沿技术参数：支持的多模态文件 mime-type 集合划分。
 # 区分 image 与 document 可以让系统对于不同资产实施差异化的编排链路（如多模态 Vision vs RAG 检索分流）。
@@ -45,22 +46,32 @@ def create_upload(db: Session, *, workspace_id: int, user_id: int, filename: str
     kind = _kind(content_type, filename)
     if kind not in {"image", "document"}:
         raise ValueError("Only image and document uploads are supported")
+    upload_id = f"upload_{uuid.uuid4().hex}"
     data_url = ""
+    storage_key = ""
     text = ""
     if kind == "image":
-        data_url = f"data:{content_type};base64,{base64.b64encode(raw).decode('ascii')}"
+        # 🎯 优先把图片字节存对象库（仅在 DB 留 storage_key 引用），DB 不再背 base64 大列。
+        #    对象库未配置 / 不可用 / 写入失败时回退到 base64 直存 DB（现状），保证单机零配置可用。
+        if object_storage.available:
+            key = f"images/{workspace_id}/{upload_id}"
+            if object_storage.put(key, raw, content_type):
+                storage_key = key
+        if not storage_key:
+            data_url = f"data:{content_type};base64,{base64.b64encode(raw).decode('ascii')}"
     else:
         text = sanitize_extracted_text(extract_document_text(filename, content_type, raw))
         if not text.strip():
             raise ValueError("Document text could not be extracted")
     upload = Upload(
-        id=f"upload_{uuid.uuid4().hex}",
+        id=upload_id,
         workspace_id=workspace_id,
         user_id=user_id,
         filename=Path(filename).name,
         content_type=content_type,
         kind=kind,
         data_url=data_url,
+        storage_key=storage_key,
         text=text[:20000],
         size=len(raw),
     )
@@ -83,9 +94,26 @@ def upload_payload(upload: Upload) -> dict:
         "content_type": upload.content_type,
         "type": upload.kind,
         "size": upload.size,
-        "preview_url": upload.data_url if upload.kind == "image" else "",
+        "preview_url": resolve_image_data_url(upload) if upload.kind == "image" else "",
         "text_preview": (upload.text or "")[:240],
     }
+
+
+def resolve_image_data_url(upload: Upload) -> str:
+    """
+    取得图片的 data URL（base64）。
+
+    🎯 优先用 DB 内联 data_url（现状 / 对象库不可用时的回退）；否则从对象库取回字节按需转 base64。
+        刻意返回 base64 而非对象库直链——外部多模态 LLM 厂商在公网，够不到内网 MinIO，必须把字节带过去；
+        前端 <img> 也因此不需要对受保护的对象库做带鉴权请求。供 LLM 视觉调用与上传预览复用。
+    """
+    if upload.data_url:
+        return upload.data_url
+    if upload.storage_key and object_storage.available:
+        data = object_storage.get(upload.storage_key)
+        if data:
+            return f"data:{upload.content_type};base64,{base64.b64encode(data).decode('ascii')}"
+    return ""
 
 
 def get_workspace_uploads(db: Session, *, workspace_id: int, upload_ids: list[str]) -> list[Upload]:

@@ -29,6 +29,7 @@ from core.db.models import (
 from core.db.session import get_db
 from core.runtime.workflow import WorkflowRunner, compact_session_memory_task
 from core.security.permissions import can_manage
+from core.tasks.dispatch import dispatch
 
 import json
 import logging
@@ -139,8 +140,10 @@ def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatReq
         yield sse_event("done", {"session_id": session.id, "message_id": assistant.id, "run_id": run.id, "content": answer})
 
         if runner.runtime and getattr(runner.runtime, "settings", {}).get("memory", {}).get("enabled"):
-            background_tasks.add_task(
+            dispatch(
+                background_tasks,
                 compact_session_memory_task,
+                task_name="lingshu.compact_session_memory",
                 session_id=session.id,
                 user_message=request.message,
                 answer=answer,

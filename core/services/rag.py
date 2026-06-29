@@ -14,7 +14,8 @@ from core.config import get_settings
 from core.db.models import KnowledgeChunk, KnowledgeDocument, KnowledgeParentChunk
 from core.integrations.llm import OpenAICompatibleProvider
 from core.integrations import vector_store as vector_store_module
-from core.services.rag_cache import redis_store
+from core.observability.metrics import record_cache
+from core.services.rag_cache import redis_store, ttl_with_jitter
 
 # 🧠 魔鬼数字：BM25 构建分批批次大小，防止全表读取导致的高内存开销与游标挂起
 BM25_BATCH_SIZE = 1000
@@ -71,6 +72,7 @@ def retrieve(
     cache_key = _cache_key(db, workspace_id=workspace_id, knowledge_base_ids=knowledge_base_ids, query=query, config=config)
     if config.get("cache_enabled", True):
         cached = redis_store.get_json(cache_key)
+        record_cache("rag_result", bool(cached.hit and cached.value))
         if cached.hit and cached.value:
             status = cached.value.get("status", {})
             status.update({"cache": {"enabled": True, "hit": True, "backend": cached.backend}})
@@ -149,9 +151,9 @@ def retrieve(
         "rag_model": "environment",
     }
     
-    # 6. 回写 Redis
+    # 6. 回写 Redis（TTL 带抖动防雪崩：版本化 key 在文档更新后会让一批缓存同时失效）
     if config.get("cache_enabled", True):
-        redis_store.set_json(cache_key, {"sources": sources, "status": status}, settings.rag_cache_ttl_seconds)
+        redis_store.set_json(cache_key, {"sources": sources, "status": status}, ttl_with_jitter(settings.rag_cache_ttl_seconds))
     return RagResult(sources, status)
 
 

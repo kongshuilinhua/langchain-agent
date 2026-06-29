@@ -29,6 +29,21 @@
     volumes:
       - milvus_data:/var/lib/milvus
 
+  minio:
+    image: quay.io/minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      # 宿主机 9000/9001 已被一个独立 minio 进程占用，这里改用 9100/9101 对外发布，避免端口冲突。
+      # 容器内仍是 9000/9001，故 compose 网络内的 api/worker 仍按 minio:9000 访问，不受影响。
+      - "9100:9000"   # S3 API（外部访问用 192.168.150.101:9100）
+      - "9101:9001"   # 控制台（http://192.168.150.101:9101）
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -36,9 +51,15 @@
     environment:
       DATABASE_URL: mysql+pymysql://lingshu:lingshu@mysql:3306/lingshu_agent
       REDIS_URL: redis://redis:6379/0
+      CELERY_ENABLED: "true"
       LINGSHU_VECTOR_BACKEND: milvus
       MILVUS_URI: http://milvus:19530
       MILVUS_COLLECTION: lingshu_chunks
+      STORAGE_BACKEND: minio
+      STORAGE_ENDPOINT: minio:9000
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin123
+      STORAGE_SECURE: "false"
       OPENAI_API_BASE: ${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-qwen-plus}
@@ -50,6 +71,37 @@
       - mysql
       - redis
       - milvus
+      - minio
+
+  # Celery worker：执行文档入库 / 重建索引 / 会话记忆压缩等异步任务。
+  # 与 api 共用镜像与环境，仅入口命令不同；横向扩容直接 `--scale worker=N`。
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: celery -A core.tasks.celery_app:celery_app worker -Q lingshu --loglevel=info
+    environment:
+      DATABASE_URL: mysql+pymysql://lingshu:lingshu@mysql:3306/lingshu_agent
+      REDIS_URL: redis://redis:6379/0
+      CELERY_ENABLED: "true"
+      LINGSHU_VECTOR_BACKEND: milvus
+      MILVUS_URI: http://milvus:19530
+      MILVUS_COLLECTION: lingshu_chunks
+      STORAGE_BACKEND: minio
+      STORAGE_ENDPOINT: minio:9000
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin123
+      STORAGE_SECURE: "false"
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-qwen-plus}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-v4}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+    depends_on:
+      - mysql
+      - redis
+      - milvus
+      - minio
 
   frontend:
     build:
@@ -64,4 +116,5 @@
 volumes:
   mysql_data:
   milvus_data:
+  minio_data:
 

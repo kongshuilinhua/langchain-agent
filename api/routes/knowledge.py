@@ -30,6 +30,7 @@ from core.services.knowledge import (
     run_kb_reindex,
 )
 from core.services.rag_cache import redis_store
+from core.tasks.dispatch import dispatch
 
 from pydantic import BaseModel
 
@@ -127,8 +128,10 @@ def upload_document(kb_id: int, request: KnowledgeDocumentCreateRequest, backgro
     # 文本提取阶段即失败（坏文件等），直接返回 422，不调度后台入库。
     if document.status == "failed":
         raise HTTPException(status_code=422, detail={"message": document.error_message or "Document text extraction failed", "document": payload})
-    background_tasks.add_task(
+    dispatch(
+        background_tasks,
         run_document_ingestion,
+        task_name="lingshu.ingest_document",
         document_id=document.id, workspace_id=membership.workspace_id, kb_id=kb.id,
     )
     return {"document": payload}
@@ -165,8 +168,10 @@ def index_kb(kb_id: int, background_tasks: BackgroundTasks, membership: Workspac
     job_id = f"kb-{kb.id}-{int(time.time())}"
     payload = {"job_id": job_id, "knowledge_base_id": kb.id, "status": "running", "message": "Knowledge base reindex started."}
     redis_store.set_job(job_id, payload)
-    background_tasks.add_task(
+    dispatch(
+        background_tasks,
         run_kb_reindex,
+        task_name="lingshu.reindex_kb",
         workspace_id=membership.workspace_id, kb_id=kb.id, job_id=job_id,
     )
     return payload
@@ -185,8 +190,8 @@ def reindex_document(kb_id: int, document_id: int, background_tasks: BackgroundT
         raise HTTPException(status_code=422, detail={"message": "文档无可索引文本，请重新上传文本版。"})
     if not mark_document_reindexing(db, document_id=document_id):
         raise HTTPException(status_code=409, detail={"message": "该文档正在索引中，请稍候。"})
-    background_tasks.add_task(run_document_ingestion, document_id=document_id,
-                             workspace_id=membership.workspace_id, kb_id=kb.id)
+    dispatch(background_tasks, run_document_ingestion, task_name="lingshu.ingest_document",
+             document_id=document_id, workspace_id=membership.workspace_id, kb_id=kb.id)
     db.refresh(document)
     return {"document": document_payload(document, 0)}
 

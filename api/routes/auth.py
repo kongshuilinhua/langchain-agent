@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from api.access import invite_workspace
 from api.deps import get_current_membership, get_current_user
+from api.rate_limit import redis_rate_limit
 from api.schemas import (
     LoginRequest,
     RegisterRequest,
@@ -34,7 +35,7 @@ from core.services.bootstrap import (
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/register")
+@router.post("/register", dependencies=[Depends(redis_rate_limit(10, 60, scope="register"))])
 def register(request: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == request.email.lower()).first():
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -70,7 +71,7 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
     return {"access_token": token, "token_type": "bearer", "user": user_payload(user), "workspace": workspace_payload(workspace, role)}
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(redis_rate_limit(20, 60, scope="login"))])
 def login(request: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == request.email.lower()).first()
     if not user or not verify_password(request.password, user.password_hash):

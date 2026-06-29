@@ -56,6 +56,10 @@ def client(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("LINGSHU_MOCK_LLM", "true")
     monkeypatch.setenv("LINGSHU_VECTOR_BACKEND", "memory")
+    # 测试隔离：强制关闭 Redis / Celery，避免本机 .env 里的 REDIS_URL 让真实限流跨用例累计
+    # 把注册/登录打成 429、或缓存/熔断状态跨用例串味（Redis 不像 DB 每个用例重建）。
+    monkeypatch.setenv("REDIS_URL", "")
+    monkeypatch.setenv("CELERY_ENABLED", "false")
     # 上传体积限额测试假设 8MB；运行时默认已调大到 30MB，固定测试环境为 8MB 让限额机制校验成立。
     monkeypatch.setenv("UPLOAD_MAX_BYTES", str(8 * 1024 * 1024))
     for key in [
@@ -69,6 +73,14 @@ def client(monkeypatch):
     import core.config
 
     core.config.get_settings.cache_clear()
+    # redis_store 是模块级单例，进程启动时已按 .env 连上真实 Redis；上面的 setenv 改不动它。
+    # 直接把已建客户端置空：其所有方法经 _redis_guard 走降级（限流放行、缓存未命中、不熔断），
+    # 让全部用例对 Redis 真正无依赖。所有模块持有的是同一个对象引用，故就地置空即全局生效。
+    import core.services.rag_cache as rag_cache_module
+
+    rag_cache_module.redis_store._client = None
+    rag_cache_module.redis_store._error = ""
+    rag_cache_module.redis_store._runtime_error = ""
     import core.db.session as db_session
     import core.integrations.vector_store as vector_module
     import core.services.knowledge as knowledge_service

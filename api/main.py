@@ -27,7 +27,7 @@ import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
@@ -83,11 +83,46 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+# ── 可观测性：请求级 trace id + HTTP 指标 ──────────────────
+@app.middleware("http")
+async def observability_middleware(request, call_next):
+    """每个请求：生成/透传 X-Request-ID 并绑 contextvar；记录 HTTP 计数与延迟直方图。"""
+    from core.observability.metrics import record_http
+    from core.observability.request_context import new_request_id, set_request_id
+
+    request_id = request.headers.get("X-Request-ID") or new_request_id()
+    set_request_id(request_id)
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration = time.perf_counter() - start
+    # 用路由模板（/api/sessions/{session_id}）而非实际路径做 label，避免指标基数爆炸
+    route = request.scope.get("route")
+    path = getattr(route, "path", None) or request.url.path
+    record_http(request.method, path, response.status_code, duration)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.get("/metrics")
+def metrics_endpoint():
+    """Prometheus 抓取端点；未安装 prometheus_client 时返回纯文本提示。"""
+    from core.observability.metrics import render
+
+    body, content_type = render()
+    return Response(content=body, media_type=content_type)
+
+
 # ── 启动钩子 ──────────────────────────────────────────────
 
 @app.on_event("startup")
 def startup() -> None:
     global startup_error
+    try:
+        from core.observability.request_context import install_request_id_logging
+
+        install_request_id_logging()
+    except Exception:
+        logger.debug("request-id logging enrichment skipped", exc_info=True)
     if settings.jwt_secret == "change-me-in-production":
         logger.warning(
             "SECURITY WARNING: JWT_SECRET is using the insecure default value. "
@@ -102,17 +137,22 @@ def startup() -> None:
     try:
         init_db()
         startup_error = None
-        # 崩溃恢复：复位上次进程退出时卡在 indexing 的文档（后台入库任务随进程丢失）。
-        try:
-            from core.db.session import SessionLocal
-            from core.services.knowledge import recover_interrupted_ingestion
+        # 崩溃恢复：复位上次进程退出时卡在 indexing 的文档。
+        # ⚠️ 仅在 BackgroundTasks 模式（celery 关闭）下执行——此时后台任务随 API 进程一起丢失，
+        #    需要在启动时复位。一旦启用 Celery，入库由独立 worker 进程执行，API 重启时这些
+        #    文档可能仍被 worker 正常处理中（崩溃恢复改由 broker 重投 + acks_late 保证），
+        #    此处若贸然复位会把在途任务误判为 failed。
+        if not settings.celery_enabled:
+            try:
+                from core.db.session import SessionLocal
+                from core.services.knowledge import recover_interrupted_ingestion
 
-            with SessionLocal() as recovery_session:
-                recovered = recover_interrupted_ingestion(recovery_session)
-            if recovered:
-                logger.warning("Reset %d document(s) stuck in 'indexing' after restart", recovered)
-        except Exception:
-            logger.exception("Failed to recover interrupted ingestion on startup")
+                with SessionLocal() as recovery_session:
+                    recovered = recover_interrupted_ingestion(recovery_session)
+                if recovered:
+                    logger.warning("Reset %d document(s) stuck in 'indexing' after restart", recovered)
+            except Exception:
+                logger.exception("Failed to recover interrupted ingestion on startup")
     except Exception as exc:
         startup_error = str(exc)[:500]
         logger.exception("Database initialization failed; API started in degraded mode")

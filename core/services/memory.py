@@ -330,115 +330,57 @@ def normalize_preference_value(value):
     return None
 
 
-def get_embeddings_model():
-    """获取 LangChain OpenAI 嵌入模型。"""
-    from langchain_openai import OpenAIEmbeddings
-    from core.config import get_settings
-    from core.integrations.llm import OpenAICompatibleProvider
+def _cosine(a: list[float], b: list[float]) -> float:
+    """余弦相似度；任一向量为零向量时返回 0。"""
+    import math
 
-    settings = get_settings()
-    provider = OpenAICompatibleProvider()
-    return OpenAIEmbeddings(
-        model=settings.openai_embedding_model,
-        base_url=provider._api_base(settings, purpose="embedding"),
-        api_key=provider._api_key(settings, purpose="embedding") or "x",
-        check_embedding_ctx_length=False,
-    )
-
-
-def sync_facts_to_vector_store(profile: AgentMemoryProfile):
-    """
-    同步 facts 到 Milvus 向量库中。
-    1. 删除该租户的所有向量。
-    2. 如果 profile.facts 不为空，则插入当前所有 facts 的向量。
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-    try:
-        from langchain_community.vectorstores import Milvus
-        from core.config import get_settings
-        settings = get_settings()
-        embeddings = get_embeddings_model()
-        
-        vectorstore = Milvus(
-            embedding_function=embeddings,
-            collection_name="agent_memory_facts",
-            connection_args={"uri": settings.milvus_uri, "token": settings.milvus_token},
-        )
-        
-        # 1. 删除该租户现有的所有向量
-        expr = f"workspace_id == {profile.workspace_id} and user_id == {profile.user_id} and agent_id == {profile.agent_id}"
-        try:
-            # 如果 collection 还未创建，delete 会报错，静默忽略
-            if vectorstore.col:
-                vectorstore.col.delete(expr)
-        except Exception:
-            pass
-            
-        # 2. 插入当前事实
-        facts = normalize_facts(profile.facts)
-        if not facts:
-            return
-            
-        texts = [fact["text"] for fact in facts]
-        metadatas = [
-            {
-                "workspace_id": profile.workspace_id,
-                "user_id": profile.user_id,
-                "agent_id": profile.agent_id,
-                "fact_id": fact["id"],
-            }
-            for fact in facts
-        ]
-        ids = [fact["id"] for fact in facts]
-        vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
-    except Exception as e:
-        logger.warning("Failed to sync facts to vector store: %s", e)
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
 
 def recall_facts(profile: AgentMemoryProfile | None, query: str, k: int) -> list[dict]:
     """
-    按 query 向量检索 facts 中的 top-k 条。
-    隔离过滤：workspace_id, user_id, agent_id。
-    如果向量库不可用或出错，降级返回 profile.facts 的全量。
+    按 query 在进程内对 profile.facts 做 embedding 余弦相似度召回 top-k（分数 >= 阈值才算召回）。
+
+    🎯 为何改为进程内召回（不再依赖 Milvus）：
+        - 事实源就是 DB 里的 profile.facts（normalize 后上限 50 条），逐条 embedding 成本可控，
+          且命中 embedding 缓存后几乎零开销；租户隔离天然成立（facts 取自该 profile）。
+        - 彻底 hermetic：不受向量库可用性 / 最终一致性 / 跨环境残留影响——修掉了原先直连 Milvus
+          导致召回随其状态漂移（且无相似度阈值、命中即全量返回）的非确定性问题。
+
+    🛡️ embedding 调用失败（如未配置嵌入 Key）时降级返回全量 facts 的 top-k，不阻断主流程。
     """
     if not profile or not profile.enabled:
         return []
     all_facts = normalize_facts(profile.facts)
     if not all_facts:
         return []
-    if not query.strip():
+    q = (query or "").strip()
+    if not q:
         return all_facts[:k]
-        
+
     import logging
+
     logger = logging.getLogger(__name__)
     try:
-        from langchain_community.vectorstores import Milvus
         from core.config import get_settings
-        settings = get_settings()
-        embeddings = get_embeddings_model()
-        
-        vectorstore = Milvus(
-            embedding_function=embeddings,
-            collection_name="agent_memory_facts",
-            connection_args={"uri": settings.milvus_uri, "token": settings.milvus_token},
-        )
-        
-        expr = f"workspace_id == {profile.workspace_id} and user_id == {profile.user_id} and agent_id == {profile.agent_id}"
-        docs = vectorstore.similarity_search(query, k=k, expr=expr)
-        
-        # 仅保留被召回的 facts，顺序与 Milvus 召回顺序一致
-        recalled_texts = [doc.page_content for doc in docs]
-        recalled_facts_dict = {fact["text"]: fact for fact in all_facts}
-        
-        recalled = []
-        for text in recalled_texts:
-            if text in recalled_facts_dict:
-                recalled.append(recalled_facts_dict[text])
-        return recalled
+        from core.integrations.llm import OpenAICompatibleProvider
+
+        threshold = get_settings().memory_recall_min_score
+        provider = OpenAICompatibleProvider()
+        query_vec = provider.embed(q)
+        scored = []
+        for fact in all_facts:
+            score = _cosine(query_vec, provider.embed(fact["text"]))
+            if score >= threshold:
+                scored.append((score, fact))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [fact for _, fact in scored[:k]]
     except Exception as e:
-        logger.warning("Vector recall failed, falling back to full facts: %s", e)
-        return all_facts
+        logger.warning("In-process fact recall failed, returning all facts: %s", e)
+        return all_facts[:k]
 
 
 def recall_profile_memory(

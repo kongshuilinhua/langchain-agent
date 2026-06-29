@@ -376,7 +376,12 @@ def test_user_model_configs_allow_only_one_default_per_user(client):
 def test_compat_migration_adds_user_model_config_id_to_existing_agents(client):
     from core.db.session import engine, init_db
 
+    is_mysql = engine.dialect.name == "mysql"
     with engine.begin() as connection:
+        # MySQL 忽略 DROP TABLE ... CASCADE 且 FK 会挡住删表（agent_memory_profiles 等引用 agents），
+        # 故先临时关闭外键检查（与 conftest 同款），让模拟旧 schema 的 drop/recreate 能跑通。
+        if is_mysql:
+            connection.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
         connection.execute(
             text(
                 "DROP TABLE IF EXISTS "
@@ -408,6 +413,9 @@ def test_compat_migration_adds_user_model_config_id_to_existing_agents(client):
                 ")"
             )
         )
+        # 复位外键检查：连接归还连接池后该会话变量会被复用，必须在本连接内还原，避免污染后续查询。
+        if is_mysql:
+            connection.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
 
     assert "user_model_config_id" not in {column["name"] for column in inspect(engine).get_columns("agents")}
 

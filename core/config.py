@@ -61,6 +61,28 @@ class Settings(BaseSettings):
     # Redis 用于 RAG 检索结果缓存，非必须依赖（不配置则静默跳过缓存）
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
 
+    # ── 异步任务队列 (Celery) ───────────────────────────────────
+    # 文档入库 / 重建索引 / 会话记忆压缩的执行后端。关闭（默认）或未安装 celery 时，
+    # 自动回退到 FastAPI BackgroundTasks（进程内执行，进程重启会丢失在途任务）。
+    celery_enabled: bool = Field(default=False, alias="CELERY_ENABLED")
+    # broker / result backend 留空则复用 redis_url，避免重复配置。
+    celery_broker_url: str | None = Field(default=None, alias="CELERY_BROKER_URL")
+    celery_result_backend: str | None = Field(default=None, alias="CELERY_RESULT_BACKEND")
+
+    # 熔断器分布式状态：开启后模型熔断的「失败计数 + 开断状态」存 Redis，多 worker 共享一致；
+    # 关闭（默认）或 Redis 不可用时退回进程内三态熔断器。
+    circuit_breaker_distributed: bool = Field(default=False, alias="CIRCUIT_BREAKER_DISTRIBUTED")
+
+    # ── 对象存储（上传文件，软依赖） ────────────────────────────
+    # backend: "none"（默认，文件 base64 直存 DB，现状）/ "minio"。
+    # 不配置或 minio 未安装时自动回退 DB 内联，单机零改动。
+    storage_backend: str = Field(default="none", alias="STORAGE_BACKEND")
+    storage_endpoint: str | None = Field(default=None, alias="STORAGE_ENDPOINT")  # host:port，不含 scheme
+    storage_bucket: str = Field(default="lingshu-uploads", alias="STORAGE_BUCKET")
+    storage_access_key: str | None = Field(default=None, alias="STORAGE_ACCESS_KEY")
+    storage_secret_key: str | None = Field(default=None, alias="STORAGE_SECRET_KEY")
+    storage_secure: bool = Field(default=False, alias="STORAGE_SECURE")
+
     # ── LLM 供应商配置 ─────────────────────────────────────────
     # 🎯 多供应商路由设计：默认走阿里云灵积(DashScope)的 OpenAI 兼容接口，
     #    也可无缝切换至 DeepSeek 或任何 OpenAI 兼容端点
@@ -140,6 +162,12 @@ class Settings(BaseSettings):
     rag_cache_enabled: bool = Field(default=True, alias="RAG_CACHE_ENABLED")
     # 🧠 缓存 TTL 3600 秒（1 小时）：平衡实时性与性能，知识库更新会通过版本哈希自动失效
     rag_cache_ttl_seconds: int = Field(default=3600, alias="RAG_CACHE_TTL_SECONDS")
+    # ── Embedding 缓存 ──────────────────────────────────────────
+    # 🧠 embedding 是「确定性 + 走外部 API（最贵）」的操作，且不随知识库文档增删而失效，
+    #    命中率远高于「整条检索结果」缓存，是缓存分层里性价比最高的一层。按 (model, 文本) sha256 缓存。
+    embedding_cache_enabled: bool = Field(default=True, alias="EMBEDDING_CACHE_ENABLED")
+    # 🧠 TTL 默认 7 天：embedding 不会因文档变更而改变，TTL 仅为给 Redis 内存占用设上限。
+    embedding_cache_ttl_seconds: int = Field(default=7 * 24 * 3600, alias="EMBEDDING_CACHE_TTL_SECONDS")
     # 🛡️ 无证据时拒绝回答：防止 LLM 在知识库无相关内容时产生幻觉
     rag_refuse_when_no_evidence: bool = Field(default=True, alias="RAG_REFUSE_WHEN_NO_EVIDENCE")
     # 🎯 父块扩展（small-to-big 检索）：用 child 小块精准命中、排序，最终喂给 LLM 时换成对应父块全文。
@@ -195,6 +223,9 @@ class Settings(BaseSettings):
     # 🧠 长期记忆自动抽取开关与向量召回 Top-K
     memory_long_term_extract_enabled: bool = Field(default=False, alias="MEMORY_LONG_TERM_EXTRACT")
     memory_recall_top_k: int = Field(default=5, alias="MEMORY_RECALL_TOP_K")
+    # 🧠 facts 进程内召回的余弦相似度阈值：低于此分的 fact 视为与本轮 query 无关、不召回。
+    #    0.5 在 mock embedding 噪声(~0.32)之上、精确命中(1.0)之下，生产用实嵌入时相关 fact 通常 0.5~0.8。
+    memory_recall_min_score: float = Field(default=0.5, alias="MEMORY_RECALL_MIN_SCORE")
 
     # ── 存储路径 ────────────────────────────────────────────────
     data_dir: Path = Path("data")
