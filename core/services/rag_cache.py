@@ -235,7 +235,7 @@ class OptionalRedisStore:
 
         ⚠️ 该「先加后判、超限再撤」属滑动窗口日志法；极端并发下 pipeline 与补偿 ZREM
             之间可能临时多放行个别请求。要严格原子可改用 Lua 脚本（EVAL）一次完成判定，
-            ragent 即采此法；此处优先保证可测与依赖最小。
+            生产级实现可改用此法；此处优先保证可测与依赖最小。
         """
         now = time.time()
         member = f"{now:.6f}:{random.random()}"

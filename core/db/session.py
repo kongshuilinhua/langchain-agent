@@ -418,6 +418,12 @@ def _run_compat_migrations() -> None:
         )
 
     if "uploads" in table_names:
+        _ensure_columns(
+            "uploads",
+            {
+                "storage_key": "VARCHAR(255) DEFAULT ''",
+            },
+        )
         if engine.dialect.name == "mysql":
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE uploads MODIFY COLUMN data_url MEDIUMTEXT NOT NULL"))
@@ -503,7 +509,7 @@ def _ensure_columns(table_name: str, columns: dict[str, str]) -> None:
         if not _VALID_IDENTIFIER.match(column_name):
             raise ValueError(f"Invalid column name for DDL: {column_name}")
         # 抽取 DDL 中的类型关键字做白名单校验
-        ddl_type = ddl.split()[0].upper() if ddl else ""
+        ddl_type = ddl.split()[0].split("(", 1)[0].upper() if ddl else ""
         if ddl_type not in _VALID_DDL_TYPES:
             raise ValueError(f"Unsupported DDL type for column {column_name}: {ddl_type}")
         

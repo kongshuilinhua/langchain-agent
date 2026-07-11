@@ -11,6 +11,17 @@ PYTHON_TARGETS = [
     "scripts",
     "tests",
 ]
+EXPECTED_PYTHON = (3, 11)
+LIGHTWEIGHT_PYTEST_TARGETS = [
+    "tests/test_config.py",
+    "tests/test_llm_generation_controls.py",
+    "tests/test_query_understanding.py",
+    "tests/test_rag_eval.py",
+    "tests/test_corpus_tools.py",
+    "tests/test_vector_store.py",
+    "tests/test_langchain_provider.py",
+    "tests/test_ingest_langchain_loaders.py",
+]
 
 
 def run_step(name: str, command: list[str], *, cwd: Path | None = None, env: dict | None = None) -> int:
@@ -37,10 +48,23 @@ def npm_command() -> str:
     return "npm.cmd" if os.name == "nt" else "npm"
 
 
+def check_python_version() -> int:
+    current = sys.version_info[:2]
+    if current != EXPECTED_PYTHON:
+        expected = ".".join(str(part) for part in EXPECTED_PYTHON)
+        actual = ".".join(str(part) for part in current)
+        print(f"Python {expected} is required for release checks; current interpreter is Python {actual}.")
+        print("Use the project uv environment, for example: uv run python scripts/release_check.py --with-frontend")
+        return 1
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run Lingshu Agent release checks.")
     parser.add_argument("--with-frontend", action="store_true", help="run frontend npm build")
-    parser.add_argument("--with-rag-eval", action="store_true", help="deprecated; kept for CLI compatibility")
+    parser.add_argument("--with-rag-eval", action="store_true", help="run RAG eval; uses mock mode unless --rag-eval-corpus is provided")
+    parser.add_argument("--rag-eval-cases", default="eval/rag_cases.jsonl", help="RAG eval cases JSONL path")
+    parser.add_argument("--rag-eval-corpus", default=os.getenv("RAG_EVAL_CORPUS", ""), help="optional normalized corpus JSONL path for offline RAG eval")
     parser.add_argument("--skip-pytest", action="store_true", help="skip pytest for faster local iteration")
     args = parser.parse_args(argv)
 
@@ -48,11 +72,16 @@ def main(argv: list[str]) -> int:
     python = sys.executable
     steps: list[tuple[str, list[str], Path | None]] = []
 
+    version_error = check_python_version()
+    if version_error:
+        return version_error
+
     if not args.skip_pytest:
         if os.getenv("TEST_DATABASE_URL"):
             steps.append(("pytest", [python, "-m", "pytest"], root))
         else:
-            print("Skipping pytest: set TEST_DATABASE_URL to an isolated test database.")
+            print("TEST_DATABASE_URL is not set; running lightweight non-DB pytest targets.")
+            steps.append(("pytest lightweight", [python, "-m", "pytest", *LIGHTWEIGHT_PYTEST_TARGETS, "-q", "--timeout=60"], root))
     steps.extend(
         [
             ("compileall", [python, "-m", "compileall", *PYTHON_TARGETS], root),
@@ -62,7 +91,12 @@ def main(argv: list[str]) -> int:
     )
 
     if args.with_rag_eval:
-        print("--with-rag-eval is deprecated in v2. Workflow/chat tests cover the current platform path.")
+        rag_eval_command = [python, "eval/run_rag_eval.py", "--cases", args.rag_eval_cases, "--summary-only"]
+        if args.rag_eval_corpus:
+            rag_eval_command.extend(["--corpus", args.rag_eval_corpus])
+        else:
+            rag_eval_command.append("--mock")
+        steps.append(("rag eval", rag_eval_command, root))
 
     if args.with_frontend:
         npm = npm_command()

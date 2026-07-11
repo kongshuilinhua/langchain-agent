@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # ── 应用基础信息 ────────────────────────────────────────────
     app_name: str = "Lingshu Agent"
     app_version: str = "0.1.0"
+    deployment_mode: str = Field(default="development", alias="LINGSHU_DEPLOYMENT_MODE")
 
     # ── 认证与安全 ──────────────────────────────────────────────
     # 🛡️ JWT 密钥：生产环境必须替换默认值，否则任何人都能伪造令牌
@@ -104,10 +105,13 @@ class Settings(BaseSettings):
     embedding_api_key: str | None = Field(default=None, alias="EMBEDDING_API_KEY")
     rerank_api_base: str | None = Field(default=None, alias="RERANK_API_BASE")
     rerank_api_key: str | None = Field(default=None, alias="RERANK_API_KEY")
+    health_model_probe_timeout_seconds: int = Field(default=30, ge=1, le=120, alias="HEALTH_MODEL_PROBE_TIMEOUT_SECONDS")
     # 健康检查是否探测模型端点连通性
     health_model_probe_enabled: bool = Field(default=True, alias="HEALTH_MODEL_PROBE_ENABLED")
     # 🛡️ Mock LLM 模式：测试环境下跳过真实 API 调用，返回确定性伪造结果，保证 CI 稳定性
     mock_llm: bool = Field(default=False, validation_alias=AliasChoices("LINGSHU_MOCK_LLM", "SWEEPER_MOCK_LLM"))
+    # 🛡️ 聊天补全 max_tokens 兜底：防止混合推理模型思考跑飞导致单次请求生成无上限（0 表示不下发该参数）
+    llm_max_tokens: int = Field(default=8192, ge=0, alias="LLM_MAX_TOKENS")
     # 查询理解解析器：默认保留原生 JSON 解析；可选 LangChain 结构化输出
     qu_parser: str = Field(default="native", alias="QU_PARSER")
 
@@ -246,6 +250,37 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """将逗号分隔的 CORS 来源字符串解析为列表，过滤空白项。"""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.deployment_mode.strip().lower() in {"prod", "production"}
+
+    def production_readiness_issues(self) -> list[str]:
+        """Return blocking configuration issues when running in production mode."""
+        if not self.is_production:
+            return []
+        issues: list[str] = []
+        if self.jwt_secret == "change-me-in-production" or len(self.jwt_secret.strip()) < 32:
+            issues.append("JWT_SECRET must be a strong random value of at least 32 characters.")
+        if not self.api_key_encryption_key or len(self.api_key_encryption_key.strip()) < 32:
+            issues.append("API_KEY_ENCRYPTION_KEY must be configured before storing user model keys or tool secrets.")
+        if self.mock_llm:
+            issues.append("LINGSHU_MOCK_LLM must be false in production.")
+        if self.vector_backend.strip().lower() == "memory":
+            issues.append("LINGSHU_VECTOR_BACKEND=memory is only suitable for local development.")
+        if not self.redis_url:
+            issues.append("REDIS_URL is required in production for cache, rate limit, job state, and Celery.")
+        if not self.celery_enabled:
+            issues.append("CELERY_ENABLED=true is required in production so indexing and memory jobs survive API restarts.")
+        if "*" in self.cors_origin_list:
+            issues.append("CORS_ORIGINS must not contain '*' when credentials are enabled.")
+        if "://lingshu:lingshu@" in self.database_url:
+            issues.append("DATABASE_URL must not use the default development database password in production.")
+        if self.storage_backend.strip().lower() == "minio" and (
+            self.storage_access_key in {None, "", "minioadmin"} or self.storage_secret_key in {None, "", "minioadmin123"}
+        ):
+            issues.append("MinIO credentials must be changed from development defaults in production.")
+        return issues
 
 
 @lru_cache

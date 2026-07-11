@@ -117,6 +117,9 @@ def metrics_endpoint():
 @app.on_event("startup")
 def startup() -> None:
     global startup_error
+    production_issues = settings.production_readiness_issues()
+    if production_issues:
+        raise RuntimeError("Production configuration is not safe: " + "; ".join(production_issues))
     try:
         from core.observability.request_context import install_request_id_logging
 
@@ -188,6 +191,9 @@ async def health():
     embedding_probe = await embed_future
 
     issues = []
+    production_issues = settings.production_readiness_issues()
+    if production_issues:
+        issues.extend(production_issues)
     if not database_status["available"]:
         issues.append("Database is configured but not reachable.")
     if not secret_storage_ready():
@@ -275,6 +281,7 @@ def _model_probe(purpose: str, *, enabled: bool) -> dict:
     try:
         if purpose == "chat":
             settings_obj = get_settings()
+            timeout_seconds = settings_obj.health_model_probe_timeout_seconds
             use_deepseek = bool(
                 settings_obj.deepseek_api_key and (
                     (settings_obj.openai_api_base or "").rstrip("/") == settings_obj.deepseek_api_base.rstrip("/")
@@ -286,15 +293,16 @@ def _model_probe(purpose: str, *, enabled: bool) -> dict:
                 provider._api_base(settings_obj, purpose="chat").rstrip("/") + "/chat/completions",
                 {"model": model, "messages": [{"role": "user", "content": "health"}], "temperature": 0, "stream": False},
                 provider._api_key(settings_obj, purpose="chat") or "",
-                timeout_seconds=8,
+                timeout_seconds=timeout_seconds,
             )
         elif purpose == "embedding":
             settings_obj = get_settings()
+            timeout_seconds = settings_obj.health_model_probe_timeout_seconds
             provider._post_json(
                 provider._api_base(settings_obj, purpose="embedding").rstrip("/") + "/embeddings",
                 {"model": settings_obj.openai_embedding_model, "input": "health"},
                 provider._api_key(settings_obj, purpose="embedding") or "",
-                timeout_seconds=8,
+                timeout_seconds=timeout_seconds,
             )
         else:
             raise ValueError("Unsupported health probe")

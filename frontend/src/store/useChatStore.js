@@ -3,7 +3,7 @@
  * 替代 main.jsx 中的 15+ 聊天相关的 useState。
  */
 import { create } from 'zustand';
-import { api, API_BASE, isAuthError, notifyAuthExpired, errorMessage } from '../lib/api.js';
+import { ApiError, API_BASE, isAuthError, notifyAuthExpired, errorMessage } from '../lib/api.js';
 
 export const useChatStore = create((set, get) => ({
   sessions: [],
@@ -77,9 +77,23 @@ export const useChatStore = create((set, get) => ({
     });
   },
 
-  sendMessage: async ({ text, activeAgentId, token, ragEnabled, thinkingEnabled, searchEnabled, chatVariables, agentForm, chatAttachments }) => {
-    set({ busy: true, error: '', draft: '', homePrompt: '' });
-    get().addMessage({ role: 'user', content: text, attachments: chatAttachments });
+  sendMessage: async ({
+    text,
+    activeAgentId,
+    token,
+    sessionId,
+    mode = 'published',
+    isDebug = false,
+    ragEnabled,
+    ragOptions,
+    thinkingEnabled,
+    searchEnabled,
+    variables = {},
+    chatAttachments = [],
+  }) => {
+    const outgoingAttachments = [...chatAttachments];
+    set({ busy: true, error: '', draft: '', homePrompt: '', sources: [], toolDebugEvents: [], chatAttachments: [] });
+    get().addMessage({ role: 'user', content: text, attachments: outgoingAttachments });
     get().addMessage({ role: 'assistant', content: '', pending: true });
 
     try {
@@ -88,20 +102,21 @@ export const useChatStore = create((set, get) => ({
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           message: text || '请分析附件内容。',
-          session_id: get().activeSessionId || null,
-          mode: 'published',
+          session_id: sessionId ?? get().activeSessionId ?? null,
+          mode,
+          is_debug: isDebug,
           rag_enabled: ragEnabled,
-          rag_options: agentForm?.rag || undefined,
+          rag_options: ragOptions || undefined,
           thinking_enabled: thinkingEnabled,
           search_enabled: searchEnabled,
-          variables: chatVariables,
-          attachments: chatAttachments.map((item) => ({ id: item.id, type: item.type, mime_type: item.content_type })),
+          variables,
+          attachments: outgoingAttachments.map((item) => ({ id: item.id, type: item.type, mime_type: item.content_type })),
         }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        const err = new Error(errorMessage(data.detail || data.message || `HTTP ${response.status}`));
-        if (isAuthError({ status: response.status })) notifyAuthExpired();
+        const err = new ApiError(errorMessage(data.detail || data.message || `HTTP ${response.status}`), response.status, data);
+        if (isAuthError(err)) notifyAuthExpired();
         throw err;
       }
       if (!response.body) throw new Error('当前浏览器不支持流式响应。');
@@ -117,11 +132,12 @@ export const useChatStore = create((set, get) => ({
         for (const part of parts) _handleSseEvent(part, get, set);
       }
     } catch (err) {
+      const message = isAuthError(err) ? '登录已失效，请重新登录。' : errorMessage(err);
+      set({ error: message });
+      get().updateLastMessage((last) => ({ ...last, pending: false, error: true, content: message }));
       if (isAuthError(err)) throw err;
-      set({ error: errorMessage(err) });
-      get().updateLastMessage((last) => ({ ...last, pending: false, error: true, content: errorMessage(err) }));
     } finally {
-      set({ busy: false });
+      set({ busy: false, chatAttachments: [] });
     }
   },
 }));
@@ -135,12 +151,26 @@ function _handleSseEvent(raw, get, set) {
     get().updateLastMessage((last) => ({ ...last, pending: false, content: (last.content || '') + data.content }));
   }
   if (event === 'sources') {
-    set({ sources: data.items || [] });
+    const sources = data.items || [];
+    set({ sources });
+    get().updateLastMessage((last) => (last?.role === 'assistant' ? { ...last, sources } : last));
+  }
+  if (['rag_status', 'tool_call', 'memory_used', 'memory_compaction', 'search_status', 'thinking_status'].includes(event)) {
+    set((state) => ({
+      toolDebugEvents: [
+        ...state.toolDebugEvents,
+        {
+          event,
+          received_at: new Date().toLocaleTimeString(),
+          ...data,
+        },
+      ].slice(-30),
+    }));
   }
   if (event === 'done') {
     set({ activeSessionId: data.session_id || null });
     get().updateLastMessage((last) => ({
-      ...last, id: data.message_id, pending: false, content: data.content || last.content,
+      ...last, id: data.message_id, run_id: data.run_id, pending: false, content: data.content || last.content,
     }));
   }
   if (event === 'error') {

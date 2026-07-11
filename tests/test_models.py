@@ -1,10 +1,17 @@
 import json
+import os
 import uuid
+
+import pytest
 
 from core.db.models import KnowledgeBase, KnowledgeDocument, User, Workspace
 from core.db.session import SessionLocal, init_db
 
+
 def test_knowledge_document_segment_config():
+    if not os.getenv("TEST_DATABASE_URL"):
+        pytest.skip("TEST_DATABASE_URL is required for DB-backed model tests.")
+
     init_db()
     db = SessionLocal()
     suffix = uuid.uuid4().hex[:12]

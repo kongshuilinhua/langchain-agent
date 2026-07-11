@@ -248,8 +248,10 @@ UPLOAD_MAX_BYTES=31457280         # 上传文件大小上限（30MB）
 ### 基础环境
 
 ```powershell
-conda create -n lingshu python=3.11 -y
-conda activate lingshu
+uv --version
+uv python install 3.11
+uv venv --python 3.11
+uv pip install -r requirements.txt
 node --version   # 确认 >= 18（https://nodejs.org/）
 ```
 
@@ -268,14 +270,13 @@ LINGSHU_VECTOR_BACKEND=milvus
 MILVUS_URI=http://localhost:19530
 ```
 
-如果没有 Docker，也可以单独安装 MySQL / Redis / Milvus，或者开发阶段用内存向量模式（`LINGSHU_VECTOR_BACKEND=memory`），不装 Milvus 和 Redis 也能跑。
+MySQL / Redis / Milvus / MinIO 可以继续使用已有虚拟机或 Docker；uv 只管理本地 Python 解释器和依赖，不接管这些外部服务。如果没有 Docker，也可以单独安装这些服务，或者开发阶段用内存向量模式（`LINGSHU_VECTOR_BACKEND=memory`），不装 Milvus 和 Redis 也能跑。
 
 ### 后端
 
 ```powershell
 Copy-Item .env.example .env          # 编辑 .env，填写 DASHSCOPE_API_KEY
-pip install -r requirements.txt
-uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+uv run uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ### 前端
@@ -294,6 +295,18 @@ npm run dev   # http://127.0.0.1:5174
 |------|------|------|
 | Backend API | `http://127.0.0.1:8000` | 不可变 |
 | Frontend Dev | `http://127.0.0.1:5174` | 不可变（`--strictPort`） |
+
+### 生产模式防呆
+
+默认配置面向本地开发。需要部署到生产环境时，先显式设置：
+
+```env
+LINGSHU_DEPLOYMENT_MODE=production
+```
+
+生产模式会在启动时阻断以下不安全组合：默认或过短的 `JWT_SECRET`、未配置 `API_KEY_ENCRYPTION_KEY`、`LINGSHU_VECTOR_BACKEND=memory`、未启用 Redis/Celery、`CORS_ORIGINS=*`、默认数据库口令、默认 MinIO 凭据、`LINGSHU_MOCK_LLM=true`。
+
+这个边界用于区分本地开发与生产部署：开发环境保持开箱即用，生产环境必须显式配置持久化、队列、密钥和外部依赖。
 
 ---
 
@@ -356,14 +369,18 @@ FastAPI (api/main.py)
 ## 测试
 
 ```powershell
+# 发布检查必须使用 Python 3.11；本地推荐通过 uv 免激活运行。
+uv run python scripts/release_check.py --with-frontend
+
 # 需指向一次性测试库（切勿用生产库）；纯函数/单元测试无需 DB 会自动 skip
 $env:TEST_DATABASE_URL = "mysql+pymysql://lingshu:lingshu@<host>:3306/lingshu_agent_test"
 $env:DATABASE_URL = $env:TEST_DATABASE_URL
 $env:LINGSHU_MOCK_LLM = "true"; $env:LINGSHU_VECTOR_BACKEND = "memory"
-pytest tests/ --timeout=60
+uv run python -m pytest tests/ --timeout=60
 ```
 
 - **CI（GitHub Actions）**：`CI`(发布检查) + `Lint & Test`(ruff + compile + pytest) 两条流水线。
+- `scripts/release_check.py` 在没有 `TEST_DATABASE_URL` 时也会运行不依赖数据库的轻量 pytest 子集，避免发布检查只做编译不跑测试。
 - CI 自带 MySQL service；`test_platform_api.py` 及 `test_final_rag.py` 的 3 个 client-fixture 集成用例在 CI 环境有连接/探针的环境限制，**仅本地运行**，CI 已 `--ignore`/`--deselect`，其余全部单元/功能/入库/LangChain 测试在 CI 执行。
 - `core.db.session.init_db` 在无 `SUPER` 权限的库上会跳过触发器创建（告警不阻断），便于受限环境与测试。
 

@@ -140,6 +140,7 @@ class WorkflowRunner:
             "profile_memory_used": {},
             "memory_enabled": normalize_memory(runtime.settings.get("memory")).get("enabled", False),
             "rag_enabled": effective_rag_enabled,
+            "knowledge_base_ids": runtime.knowledge_base_ids,
             **({"rag_enabled_request": rag_enabled} if rag_enabled is not None else {}),
             "rag_top_k": rag_config["top_k"],
             "rag_config": rag_config,
@@ -595,7 +596,13 @@ class WorkflowRunner:
             if context.get("draft"):
                 return self._llm_output(agent, context, context["draft"])
             messages = self._llm_messages(agent, context)
-            draft = self.provider.chat(messages, model=agent.model, temperature=agent.temperature, runtime_config=agent.runtime_config).content or ""
+            draft = self.provider.chat(
+                messages,
+                model=agent.model,
+                temperature=agent.temperature,
+                runtime_config=agent.runtime_config,
+                thinking=bool(context.get("thinking_enabled")),
+            ).content or ""
             return self._llm_output(agent, context, draft)
             
         # ==========================================
@@ -626,7 +633,13 @@ class WorkflowRunner:
             return self._llm_output(agent, context, draft)
         messages = self._llm_messages(agent, context)
         chunks = []
-        for token in self.provider.chat_stream(messages, model=agent.model, temperature=agent.temperature, runtime_config=agent.runtime_config):
+        for token in self.provider.chat_stream(
+            messages,
+            model=agent.model,
+            temperature=agent.temperature,
+            runtime_config=agent.runtime_config,
+            thinking=bool(context.get("thinking_enabled")),
+        ):
             chunks.append(token)
             yield {"event": "token", "content": token}
         draft = "".join(chunks)
@@ -1039,6 +1052,8 @@ class WorkflowRunner:
         """
         if not context.get("rag_enabled", True):
             result = qu_service._passthrough(context["input"], reason="rag_disabled")
+        elif not context.get("knowledge_base_ids"):
+            result = qu_service._passthrough(context["input"], reason="no_knowledge_base")
         else:
             config = runtime.settings.get("query_understanding") or {}
             history = self._history_turns(context.get("memory_summary") or "")

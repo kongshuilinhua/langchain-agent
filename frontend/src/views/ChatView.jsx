@@ -1,5 +1,5 @@
 ﻿import { ChatComposer } from '../components/chat/ChatComposer.jsx';
-import React, { useRef, useState, useEffect } from 'react';
+import React, { Suspense, lazy } from 'react';
 import {
   SquarePen,
   ImagePlus,
@@ -12,7 +12,6 @@ import {
   Database,
   Send
 } from 'lucide-react';
-import { MessageList } from '../components/MessageList.jsx';
 import { AgentAvatar } from '../components/AgentAvatar.jsx';
 import {
   reasoningCapabilityForModel,
@@ -27,6 +26,12 @@ import {
   handleAttachmentPaste,
   handleAttachmentDrop,
 } from '../utils.js';
+
+const MessageList = lazy(() => import('../components/MessageList.jsx').then((module) => ({ default: module.MessageList })));
+
+function MessageListFallback() {
+  return <p className="message-pending">加载消息...</p>;
+}
 
 const CHAT_COPY = {
   noAgentTitle: '暂无可对话的智能体',
@@ -212,12 +217,14 @@ function ChatHomeV2({
             </div>
           </section>
         ) : (
-          <MessageList
-            messages={messages}
-            feedbackByMessage={feedbackByMessage}
-            submitFeedback={submitFeedback}
-            avatar={activeAgent?.avatar || agentForm.avatar || 'AI'}
-          />
+          <Suspense fallback={<MessageListFallback />}>
+            <MessageList
+              messages={messages}
+              feedbackByMessage={feedbackByMessage}
+              submitFeedback={submitFeedback}
+              avatar={activeAgent?.avatar || agentForm.avatar || 'AI'}
+            />
+          </Suspense>
         )}
       </div>
       {(agentForm.variables || []).length > 0 && (

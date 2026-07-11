@@ -4335,11 +4335,10 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
 
 .workspace-doc-row {
   display: grid;
-  /* 图标 | 详情 | 状态 | 重建索引(已索引/失败时才出现) | 删除。
-     必须 5 列：少于 5 列时删除按钮会被挤到隐式第二行导致看不见。 */
-  grid-template-columns: auto 1fr auto auto auto;
+  /* 图标 | 详情 | 状态 | 操作组 */
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: 10px;
   cursor: pointer;
@@ -4407,56 +4406,68 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
   color: #991b1b;
 }
 
-.btn-delete-doc {
-  background: transparent;
-  border: 0;
-  color: #94a3b8;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  display: flex;
+.doc-row-actions {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0.65; /* 常驻可见，不再 hover 整行才出现 */
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #d8e1ee;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
   flex-shrink: 0;
-  transition: all 0.15s ease;
 }
 
-.workspace-doc-row:hover .btn-delete-doc {
-  opacity: 1;
-  color: #64748b;
+.workspace-doc-row:hover .doc-row-actions {
+  border-color: #cbd5e1;
+  background: #ffffff;
 }
 
-.btn-delete-doc:hover {
-  background: #fee2e2;
-  color: #ef4444;
+.workspace-doc-row.active .doc-row-actions {
+  border-color: #c7d2fe;
+  background: rgba(255, 255, 255, 0.82);
 }
 
-.btn-reindex-doc {
-  background: transparent;
-  border: 0;
-  color: #94a3b8;
+.workspace-doc-row .btn-delete-doc,
+.workspace-doc-row .btn-reindex-doc {
   width: 24px;
   height: 24px;
+  padding: 0;
   border-radius: 6px;
+  border: 0;
+  background: transparent;
+  color: #334155;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0.65;
+  opacity: 1;
   flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
 .workspace-doc-row:hover .btn-reindex-doc {
-  opacity: 1;
-  color: #64748b;
+  color: #1e293b;
 }
 
-.btn-reindex-doc:hover {
-  background: #dbeafe;
-  color: #3b82f6;
+.workspace-doc-row:hover .btn-delete-doc {
+  color: #1e293b;
+}
+
+.workspace-doc-row .btn-reindex-doc:hover {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.workspace-doc-row .btn-delete-doc:hover {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.workspace-doc-row .btn-delete-doc:focus-visible,
+.workspace-doc-row .btn-reindex-doc:focus-visible {
+  outline: 2px solid rgba(79, 70, 229, 0.32);
+  outline-offset: 2px;
 }
 
 .empty-workspace-docs {

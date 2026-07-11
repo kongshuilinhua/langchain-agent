@@ -45,6 +45,8 @@ def install_request_id_logging() -> None:
             try:
                 handler.addFilter(RequestIdFilter())
                 existing = handler.formatter._fmt if handler.formatter else "%(levelname)s:%(name)s:%(message)s"
+                if "levelprefix" in existing:
+                    continue
                 if "request_id" not in existing:
                     handler.setFormatter(logging.Formatter("[%(request_id)s] " + existing))
             except Exception:  # pragma: no cover - 日志增强失败不致命

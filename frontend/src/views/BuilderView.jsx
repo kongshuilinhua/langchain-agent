@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { Suspense, lazy, useRef, useState, useEffect } from 'react';
 import {
   ChevronLeft,
   Plus,
@@ -19,7 +19,6 @@ import {
   ChevronRight,
   Trash2
 } from 'lucide-react';
-import { MessageList } from '../components/MessageList.jsx';
 import { AgentAvatar } from '../components/AgentAvatar.jsx';
 import { PromptTemplateDialog } from '../components/PromptTemplateDialog.jsx';
 import { KnowledgeBaseDialog } from '../components/KnowledgeBaseDialog.jsx';
@@ -51,6 +50,12 @@ import {
   handleAttachmentDrop,
   SAMPLE_MESSAGES,
 } from '../utils.js';
+
+const MessageList = lazy(() => import('../components/MessageList.jsx').then((module) => ({ default: module.MessageList })));
+
+function MessageListFallback() {
+  return <p className="message-pending">加载消息...</p>;
+}
 
 // Simple tool type utilities
 function toolType(tool) {
@@ -844,7 +849,9 @@ export function BuilderView(props) {
                 <p>{agentForm.opening_message || '你好'}</p>
               </div>
             ) : (
-              <MessageList messages={messages} feedbackByMessage={feedbackByMessage} submitFeedback={submitFeedback} avatar={activeAgent?.avatar || agentForm.avatar || 'AI'} />
+              <Suspense fallback={<MessageListFallback />}>
+                <MessageList messages={messages} feedbackByMessage={feedbackByMessage} submitFeedback={submitFeedback} avatar={activeAgent?.avatar || agentForm.avatar || 'AI'} />
+              </Suspense>
             )}
           </div>
           {messages.length <= 1 && (agentForm.suggested_questions || []).length > 0 && (

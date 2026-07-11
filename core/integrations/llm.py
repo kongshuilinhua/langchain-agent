@@ -172,6 +172,7 @@ class OpenAICompatibleProvider:
         temperature: float = 0.4,
         runtime_config: dict | None = None,
         tools: list[dict] | None = None,
+        thinking: bool = False,
     ) -> ChatResponse:
         """
         同步文本生成方法（支持 Tool Call 参数请求）。
@@ -179,9 +180,10 @@ class OpenAICompatibleProvider:
         🧠 魔鬼数字与前沿技术参数：
             - `temperature` 默认 0.4: 处于确定性回答与创造性逻辑的均衡点，适合严谨的 Agent 编排流转。
             - 针对 Mock 模式，工具调用仿真生成确定性的哈希值作为 call_id，方便前后端状态回溯。
-        
+
         🛡️ 防御性编程：
             - 对空 API_KEY 在执行前进行前置检查，避免发出无谓的 HTTP 请求。
+            - `thinking` 默认 False：查询理解、工具决策、记忆摘要等内部调用不应触发混合推理模型的隐藏思考。
         """
         settings = get_settings()
         api_key = self._api_key(settings, runtime_config, purpose="chat")
@@ -216,6 +218,7 @@ class OpenAICompatibleProvider:
             "temperature": temperature,
             "stream": False,
         }
+        self._apply_generation_limits(payload, settings, runtime_config, thinking)
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -235,6 +238,7 @@ class OpenAICompatibleProvider:
         temperature: float = 0.4,
         runtime_config: dict | None = None,
         tools: list[dict] | None = None,
+        thinking: bool = False,
     ) -> Iterable[str]:
         """
         异步流式文本生成生成器（Server-Sent Events）。
@@ -242,12 +246,14 @@ class OpenAICompatibleProvider:
         ⚡ 边界与性能思考：
             - 利用 Python 的 `yield` 关键字返回生成器，支持逐字/逐词流式推送到前端，显著降低用户端首字延迟（TTFT）。
             - 流式输出在大批量并发处理下，能大幅平抑服务器网络 I/O 峰值吞吐，优化瞬时带宽占用。
+            - `thinking=False` 时对原生推理模型显式下发 enable_thinking=false，
+              避免混合推理模型（如 Qwen3 系列）默认思考导致简单问题也长时间无首字输出。
         """
         settings = get_settings()
         api_key = self._api_key(settings, runtime_config, purpose="chat")
         if settings.mock_llm:
             self.last_chat_mock = True
-            text = self.chat(messages, model=model, temperature=temperature, runtime_config=runtime_config, tools=tools)
+            text = self.chat(messages, model=model, temperature=temperature, runtime_config=runtime_config, tools=tools, thinking=thinking)
             if text.tool_calls:
                 yield json.dumps({"tool_calls": text.tool_calls}, ensure_ascii=False)
                 return
@@ -271,6 +277,7 @@ class OpenAICompatibleProvider:
             "temperature": temperature,
             "stream": True,
         }
+        self._apply_generation_limits(payload, settings, runtime_config, thinking)
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -571,6 +578,20 @@ class OpenAICompatibleProvider:
                 f"Model call failed: cannot connect to model gateway {url}. Check OPENAI_API_BASE, proxy, certs and API key. Raw error: {exc}"
             ) from exc
 
+    def _apply_generation_limits(self, payload: dict, settings, runtime_config: dict | None, thinking: bool) -> None:
+        """Apply provider-safe generation controls to chat completion payloads."""
+        max_tokens = int((runtime_config or {}).get("max_tokens") or settings.llm_max_tokens or 0)
+        if max_tokens > 0:
+            payload["max_tokens"] = max_tokens
+        if self._supports_enable_thinking(payload.get("model", ""), settings, runtime_config):
+            payload["enable_thinking"] = bool(thinking)
+
+    def _supports_enable_thinking(self, model: str, settings, runtime_config: dict | None) -> bool:
+        """Return whether the provider/model is known to accept enable_thinking."""
+        base_url = self._api_base(settings, runtime_config, purpose="chat")
+        marker = f"{model} {base_url} {(runtime_config or {}).get('provider', '')}".lower()
+        return "qwen3" in marker
+
     def _stream_delta(self, data: dict) -> str:
         """
         流式消息碎片字段定位处理器。
@@ -587,6 +608,9 @@ class OpenAICompatibleProvider:
             content = delta.get("content")
             if isinstance(content, str):
                 return content
+            # 🎯 reasoning_content（原生推理思考流）不混入回答 token：
+            #    思考文本一旦拼进 draft 就会存库、进会话记忆并展示在回答气泡里。
+            #    思考期间前端由 thinking_status 提示，最终只中继干净的 content。
             if isinstance(content, list):
                 parts = []
                 for item in content:
