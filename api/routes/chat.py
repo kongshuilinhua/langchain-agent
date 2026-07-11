@@ -120,6 +120,9 @@ def stream_chat_events(db: Session, agent: Agent, user_id: int, request: ChatReq
         ):
             if event["event"] == "token":
                 yield sse_event("token", {"content": event.get("content", "")})
+            elif event["event"] == "thinking_token":
+                # 🎯 思考轨迹独立通道：只透传给前端实时渲染，不参与 answer 拼装，也绝不写入 Message
+                yield sse_event("thinking_token", {"content": event.get("content", "")})
             elif event["event"] == "step":
                 step = event["step"]
                 for runtime_event in step.get("events", []):

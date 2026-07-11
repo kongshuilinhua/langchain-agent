@@ -3022,6 +3022,49 @@ input:focus, textarea:focus, select:focus { border-color: #6b63ff; box-shadow: 0
   color: #667085;
   font-style: italic;
 }
+.message-thinking {
+  margin-bottom: 8px;
+}
+.message-thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: transparent;
+  color: #667085;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.message-thinking-toggle:hover {
+  background: #f2f4f7;
+  color: #344054;
+}
+.message-thinking.in-progress .message-thinking-toggle span {
+  color: #5b4bff;
+}
+.thinking-chevron {
+  transition: transform 0.15s ease;
+}
+.thinking-chevron.open {
+  transform: rotate(180deg);
+}
+.message-thinking-body {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid #e4e7ec;
+  border-radius: 0 8px 8px 0;
+  background: #f9fafb;
+  color: #667085;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
 .message-error {
   color: #b42318;
 }

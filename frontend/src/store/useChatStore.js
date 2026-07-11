@@ -150,6 +150,10 @@ function _handleSseEvent(raw, get, set) {
   if (event === 'token') {
     get().updateLastMessage((last) => ({ ...last, pending: false, content: (last.content || '') + data.content }));
   }
+  if (event === 'thinking_token') {
+    // 思考轨迹独立累加到 thinking 字段，绝不拼入 content（content 是最终落库正文）
+    get().updateLastMessage((last) => ({ ...last, thinking: (last.thinking || '') + data.content }));
+  }
   if (event === 'sources') {
     const sources = data.items || [];
     set({ sources });
