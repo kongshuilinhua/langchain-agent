@@ -1636,6 +1636,15 @@ function App() {
         return next;
       });
     }
+    if (event === 'thinking_token') {
+      // 思考轨迹独立累加到 thinking 字段，绝不拼入 content（content 是最终落库正文）
+      setMessages((items) => {
+        const next = [...items];
+        const last = next[next.length - 1];
+        next[next.length - 1] = { ...last, thinking: (last.thinking || '') + data.content };
+        return next;
+      });
+    }
     if (event === 'sources') {
       const items = data.items || [];
       setSources(items);

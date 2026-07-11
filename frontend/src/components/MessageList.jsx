@@ -1,10 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import { ThumbsUp, ThumbsDown, FileText, Search, ImagePlus } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, FileText, Search, ImagePlus, Brain, ChevronDown } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar.jsx';
 
 export function MessageList({ messages, feedbackByMessage = {}, submitFeedback = () => {}, avatar = 'AI' }) {
@@ -20,7 +20,12 @@ export function MessageList({ messages, feedbackByMessage = {}, submitFeedback =
           <div className="message-body">
             {message.role === 'assistant' ? (
               <div className={message.error ? 'message-error' : ''}>
-                {message.pending && !message.content ? <p className="message-pending">思考中...</p> : <MarkdownContent content={message.content || ''} />}
+                {message.thinking && (
+                  <ThinkingPanel thinking={message.thinking} inProgress={Boolean(message.pending && !message.content)} />
+                )}
+                {message.pending && !message.content
+                  ? (!message.thinking && <p className="message-pending">思考中...</p>)
+                  : <MarkdownContent content={message.content || ''} />}
               </div>
             ) : <>
               <p>{message.content}</p>
@@ -65,6 +70,22 @@ export function MessageList({ messages, feedbackByMessage = {}, submitFeedback =
         </div>
       ))}
     </>
+  );
+}
+
+export function ThinkingPanel({ thinking, inProgress }) {
+  // 手动管理折叠：流式期间每个 thinking_token 都会触发重渲染，
+  // 用受控 <details open> 会把用户手动折叠的面板重新顶开，故用 useState 保持用户操作。
+  const [open, setOpen] = useState(true);
+  return (
+    <div className={`message-thinking ${inProgress ? 'in-progress' : ''}`}>
+      <button type="button" className="message-thinking-toggle" onClick={() => setOpen((value) => !value)}>
+        <Brain size={14} />
+        <span>{inProgress ? '深度思考中…' : '已深度思考'}</span>
+        <ChevronDown size={14} className={`thinking-chevron ${open ? 'open' : ''}`} />
+      </button>
+      {open && <pre className="message-thinking-body">{thinking}</pre>}
+    </div>
   );
 }
 

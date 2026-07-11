@@ -235,9 +235,21 @@ class OpenAICompatibleProvider:
         temperature: float = 0.4,
         runtime_config: dict | None = None,
         tools: list[dict] | None = None,
-    ) -> Iterable[str]:
+        thinking: bool = False,
+    ) -> Iterable[dict]:
         """
         异步流式文本生成生成器（Server-Sent Events）。
+
+        🎯 产出协议（帧协议）：
+            - 每帧为 dict：`{"type": "content" | "reasoning", "text": str}`。
+            - `content` 帧是回答正文 Token；`reasoning` 帧是原生推理模型（如 Qwen3 系列开启
+              enable_thinking 后）的思考轨迹流，两条通道彻底分离，消费方绝不允许把
+              reasoning 帧拼进最终回答（否则会污染存库正文与会话记忆）。
+
+        🧠 深度思考（thinking=True）：
+            - 仅对按模型名识别出的 Qwen3 系列下发 DashScope 的 `enable_thinking: true` 扩展参数
+              （该参数仅流式模式支持）；其他原生推理模型（如 deepseek-reasoner）默认自带思考流，
+              无需额外参数，reasoning 帧解析对它们同样生效。
 
         ⚡ 边界与性能思考：
             - 利用 Python 的 `yield` 关键字返回生成器，支持逐字/逐词流式推送到前端，显著降低用户端首字延迟（TTFT）。
@@ -249,10 +261,16 @@ class OpenAICompatibleProvider:
             self.last_chat_mock = True
             text = self.chat(messages, model=model, temperature=temperature, runtime_config=runtime_config, tools=tools)
             if text.tool_calls:
-                yield json.dumps({"tool_calls": text.tool_calls}, ensure_ascii=False)
+                yield {"type": "content", "text": json.dumps({"tool_calls": text.tool_calls}, ensure_ascii=False)}
                 return
+            if thinking:
+                # 🛡️ 脱机联调对齐：thinking 开启时仿真一段思考流，保证前端/工作流的独立通道无 API Key 也可联调
+                user_text = self._content_text(next((m["content"] for m in reversed(messages) if m.get("role") == "user"), ""))
+                mock_reasoning = f"Mock reasoning for: {user_text}"
+                for index in range(0, len(mock_reasoning), 24):
+                    yield {"type": "reasoning", "text": mock_reasoning[index : index + 24]}
             for index in range(0, len(text.content or ""), 24):
-                yield (text.content or "")[index : index + 24]
+                yield {"type": "content", "text": (text.content or "")[index : index + 24]}
             return
         if not api_key:
             raise RuntimeError("Chat model API key is not configured")
@@ -271,6 +289,9 @@ class OpenAICompatibleProvider:
             "temperature": temperature,
             "stream": True,
         }
+        if thinking and self._supports_enable_thinking(model_name):
+            # 🧠 DashScope 扩展参数：Qwen3 系列需显式开启才输出 reasoning_content 思考流（仅流式支持）
+            payload["enable_thinking"] = True
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -526,9 +547,9 @@ class OpenAICompatibleProvider:
                 f"Model call failed: cannot connect to model gateway {url}. Check OPENAI_API_BASE, proxy, certs and API key. Raw error: {exc}"
             ) from exc
 
-    def _post_json_stream(self, url: str, payload: dict, api_key: str) -> Iterable[str]:
+    def _post_json_stream(self, url: str, payload: dict, api_key: str) -> Iterable[dict]:
         """
-        纯 Python 原生 SSE（Server-Sent Events）解析流式输出生成器。
+        纯 Python 原生 SSE（Server-Sent Events）解析流式输出生成器（产出 chat_stream 帧协议 dict）。
 
         🛡️ 防御性设计：
             - `Accept` 字段指定为 "text/event-stream" 触发流式模式。
@@ -558,9 +579,7 @@ class OpenAICompatibleProvider:
                         data = json.loads(payload_text)
                     except json.JSONDecodeError:
                         continue
-                    token = self._stream_delta(data)
-                    if token:
-                        yield token
+                    yield from self._stream_delta(data)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:800]
             raise RuntimeError(
@@ -571,33 +590,55 @@ class OpenAICompatibleProvider:
                 f"Model call failed: cannot connect to model gateway {url}. Check OPENAI_API_BASE, proxy, certs and API key. Raw error: {exc}"
             ) from exc
 
-    def _stream_delta(self, data: dict) -> str:
+    @staticmethod
+    def _supports_enable_thinking(model_name: str) -> bool:
+        """按模型名识别是否需要下发 DashScope `enable_thinking` 扩展参数（Qwen3 系列）。"""
+        return "qwen3" in (model_name or "").lower()
+
+    def _stream_delta(self, data: dict) -> list[dict]:
         """
-        流式消息碎片字段定位处理器。
-        
+        流式消息碎片字段定位处理器（返回 0~2 个 chat_stream 协议帧）。
+
+        🎯 双通道拆分：
+            - `delta.reasoning_content`（Qwen3/DeepSeek-R1 等原生推理模型的思考流）→ reasoning 帧，
+              独立通道推送，绝不与回答正文混流。
+            - `delta.content` → content 帧，回答正文行为与拆分前完全一致。
+            - 阶段切换的边界报文理论上可能同时携带两个字段，reasoning 帧先行保证时序正确。
+
         🛡️ 防御性设计：
             - 精细解析 OpenAI 的 delta 字段，兼容不同的 delta 报文返回，包括支持列表变体 `choices[0].delta.content`，避免多厂商细微差异引起的解析异常崩溃。
         """
         choices = data.get("choices") or []
         if not choices:
-            return ""
+            return []
         first = choices[0] or {}
+        frames: list[dict] = []
         delta = first.get("delta") or {}
         if isinstance(delta, dict):
+            reasoning = delta.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning:
+                frames.append({"type": "reasoning", "text": reasoning})
             content = delta.get("content")
-            if isinstance(content, str):
-                return content
+            if isinstance(content, str) and content:
+                frames.append({"type": "content", "text": content})
+                return frames
             if isinstance(content, list):
                 parts = []
                 for item in content:
                     if isinstance(item, dict) and isinstance(item.get("text"), str):
                         parts.append(item["text"])
-                return "".join(parts)
+                if "".join(parts):
+                    frames.append({"type": "content", "text": "".join(parts)})
+                return frames
+            if frames:
+                return frames
         message = first.get("message") or {}
-        if isinstance(message, dict) and isinstance(message.get("content"), str):
-            return message["content"]
+        if isinstance(message, dict) and isinstance(message.get("content"), str) and message["content"]:
+            return [{"type": "content", "text": message["content"]}]
         text = first.get("text")
-        return text if isinstance(text, str) else ""
+        if isinstance(text, str) and text:
+            return [{"type": "content", "text": text}]
+        return []
 
     def _content_text(self, content) -> str:
         """

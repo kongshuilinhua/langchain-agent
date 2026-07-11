@@ -613,6 +613,14 @@ class WorkflowRunner:
         """
         LLM 节点流式 Token 中继。
 
+        🎯 双事件通道：
+            - provider 帧协议 `{"type": "content"|"reasoning", "text": ...}` 在此分流：
+              content 帧照旧发 `token` 事件并拼入 draft；reasoning 帧（原生推理模型的思考轨迹）
+              转成独立的 `thinking_token` 事件实时推送前端。
+            - 思考文本绝不拼入 draft——draft 会作为最终回答存库并进入会话记忆，混入思考流会污染正文。
+            - 仅当本轮裁决为原生推理（thinking_status.type == "native"）时才向 provider 下发 thinking，
+              提示词增强（prompt）模式不产生思考流，无需开启。
+
         ⚡ 边界与性能思考（极致的首帧响应 TTFT 模拟设计）：
             - 若大模型已经在 Tool 调用环节产出了完整的草稿 `draft`，此时没有实时向远端 LLM 发起连接的动作。
               为了保持流式打字输出的“一致人机感”，设计了一个“极小时间常数的流式模拟生成器”：
@@ -625,10 +633,26 @@ class WorkflowRunner:
                 yield {"event": "token", "content": draft[index : index + 24]}
             return self._llm_output(agent, context, draft)
         messages = self._llm_messages(agent, context)
+        native_thinking = bool(context.get("thinking_enabled")) and (context.get("thinking_status") or {}).get("type") == "native"
         chunks = []
-        for token in self.provider.chat_stream(messages, model=agent.model, temperature=agent.temperature, runtime_config=agent.runtime_config):
-            chunks.append(token)
-            yield {"event": "token", "content": token}
+        for frame in self.provider.chat_stream(
+            messages,
+            model=agent.model,
+            temperature=agent.temperature,
+            runtime_config=agent.runtime_config,
+            thinking=native_thinking,
+        ):
+            # 🛡️ 防御性兼容：容忍 provider 退化产出裸字符串（一律视为正文 Token）
+            if isinstance(frame, str):
+                frame = {"type": "content", "text": frame}
+            text = frame.get("text") or ""
+            if not text:
+                continue
+            if frame.get("type") == "reasoning":
+                yield {"event": "thinking_token", "content": text}
+                continue
+            chunks.append(text)
+            yield {"event": "token", "content": text}
         draft = "".join(chunks)
         return self._llm_output(agent, context, draft)
 
