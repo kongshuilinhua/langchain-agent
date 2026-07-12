@@ -1,7 +1,28 @@
 from core.config import Settings
 
+# 🛡️ 测试封闭性：CI/本地 shell 可能全局导出这些变量（如 CI 的 LINGSHU_MOCK_LLM=true、
+#    JWT_SECRET=test-...），若漏进 Settings 会污染生产就绪检查的断言，先统一清空。
+_AMBIENT_ENV_KEYS = [
+    "LINGSHU_DEPLOYMENT_MODE",
+    "JWT_SECRET",
+    "API_KEY_ENCRYPTION_KEY",
+    "LINGSHU_MOCK_LLM",
+    "SWEEPER_MOCK_LLM",
+    "LINGSHU_VECTOR_BACKEND",
+    "SWEEPER_VECTOR_BACKEND",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "CELERY_ENABLED",
+    "CORS_ORIGINS",
+    "STORAGE_BACKEND",
+    "STORAGE_ACCESS_KEY",
+    "STORAGE_SECRET_KEY",
+]
+
 
 def _settings(monkeypatch, **env):
+    for key in _AMBIENT_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     return Settings(_env_file=None)
