@@ -29,6 +29,7 @@ storage/
 rag/chroma_db/
 agent/tools/chroma_db/
 *.sqlite3
+*.db
 md5.txt
 
 # 本地聊天记录
