@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=8192, ge=0, alias="LLM_MAX_TOKENS")
     # 查询理解解析器：默认保留原生 JSON 解析；可选 LangChain 结构化输出
     qu_parser: str = Field(default="native", alias="QU_PARSER")
+    # 跨语言查询翻译：中文查询→英文翻译喂给 BM25（英文文档），Dense/Rerank 不受影响
+    translate_query_enabled: bool = Field(default=True, alias="LINGSHU_TRANSLATE_QUERY")
+    # 翻译用模型（None 复用主对话模型；建议配成免费/便宜的小模型如 Qwen3-8B）
+    translate_model: str | None = Field(default=None, alias="LINGSHU_TRANSLATE_MODEL")
 
     # ── LangSmith 可观测性（默认关闭，不产生外部 trace） ────────
     langsmith_tracing: bool = Field(default=False, alias="LANGSMITH_TRACING")
